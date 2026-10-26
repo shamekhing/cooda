@@ -1,0 +1,15 @@
+*.gprj.user
+.vscode/
+*style.css
+*rtl_parser.result
+*rtl_parser_arg.json
+*_syn_resource.html
+*_syn_rsc.xml
+*_syn.rpt.html
+*impl/temp/
+*gwsynthesis/
+*pnr/
+*_tmp.v
+examples/
+src/sim/build/
+src/sim/waveforms/
