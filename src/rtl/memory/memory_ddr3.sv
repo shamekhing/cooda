@@ -1,0 +1,395 @@
+// ============================================================
+// memory_ddr3  bus target backed by the DDR3 controller
+// ============================================================
+//
+// Presents the main-memory contract the SoC already uses, on top
+// of ddr3_controller (pclk domain) and ddr3_cdc:
+//
+//   - 32-bit, byte-addressed, word-aligned bus
+//   - rsp.ready is a one-cycle pulse, so the master must drop
+//     req.valid once it completes
+//   - one outstanding transaction, no pipelining
+//   - an error instead of a hang when the controller is not
+//     calibrated yet, the address is outside the DDR3 window, the
+//     address is misaligned, or a write strobe is partial
+//
+// ADDRESSING
+//   The controller works in 16-bit halfword addresses and writes
+//   only the addressed halfword (it masks the rest of the burst
+//   with DM), so one 32-bit bus word becomes two commands:
+//
+//     write: halfword 2i then 2i+1, low half first (little endian)
+//     read : halfword 2i then 2i+1, assembled {high, low}
+//
+//   Byte address A maps to halfword A[26:1], so the window is
+//   2^27 bytes = 128 MiB, the whole fitted DRAM.
+//
+// REFRESH
+//   The controller leaves refresh scheduling to its client: the
+//   DRAM needs one auto-refresh every 15.6 us. A pclk counter
+//   raises ref_pending every REFRESH_CYCLES (14 us), and the
+//   engine issues it as soon as the current command finishes, so
+//   a refresh is never starved by bus traffic.
+//
+// TWO CLOCK DOMAINS
+//   clk / rst        : 27 MHz SoC side, the bus contract
+//   clk_ddr / rst_ddr: pclk side, the command engine
+//   Only ddr3_cdc and the ctl_ready synchroniser cross between
+//   them.
+// ============================================================
+
+module memory_ddr3 #(
+    // pclk cycles between refreshes. 99.56 MHz / 1400 = 14 us,
+    // comfortably inside the 15.6 us the DRAM needs.
+    parameter int REFRESH_CYCLES = 1400
+) (
+    // ---------------- SoC domain ----------------
+    input  logic        clk,
+    input  logic        rst,
+    input  soc_pkg::bus_req_s req,
+    output soc_pkg::bus_rsp_s rsp,
+
+    // ---------------- DDR3 controller domain ----------------
+    input  logic        clk_ddr,
+    input  logic        rst_ddr,
+
+    // ddr3_controller client interface
+    output logic        ctl_rd,
+    output logic        ctl_wr,
+    output logic        ctl_refresh,
+    output logic [25:0] ctl_addr,       // halfword address
+    output logic [15:0] ctl_din,
+    input  logic [15:0] ctl_dout,
+    input  logic        ctl_busy,
+    input  logic        ctl_data_ready,
+    input  logic        ctl_ready       // write_level_done & read_calib_done
+);
+
+    localparam logic [31:0] DDR3_BYTES = 32'h0800_0000;   // 128 MiB
+
+    // ========================================================
+    // STATUS CROSSING (pclk -> clk)
+    // ========================================================
+    // ctl_ready is quasi-static (it only ever rises), so a plain
+    // two-flop synchroniser is enough.
+    // --------------------------------------------------------
+
+    logic ctl_ready_s1, ctl_ready_s2;
+
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) begin
+            ctl_ready_s1 <= 1'b0;
+            ctl_ready_s2 <= 1'b0;
+        end else begin
+            ctl_ready_s1 <= ctl_ready;
+            ctl_ready_s2 <= ctl_ready_s1;
+        end
+    end
+
+
+
+    // ========================================================
+    // BUS CONTRACT (clk domain)
+    // ========================================================
+
+    typedef enum logic [1:0] {
+        StIdle,
+        StBusy,
+        StDone
+    } bus_state_e;
+
+    bus_state_e bus_q, bus_d;
+
+    logic addr_ok, align_ok, strobe_ok, local_err;
+
+    assign addr_ok   = (req.addr < DDR3_BYTES);
+    assign align_ok  = soc_pkg::bus_is_aligned(req.addr);
+    assign strobe_ok = (req.op == soc_pkg::BusRead) ||
+                       (req.wstrb == soc_pkg::BUS_STRB_ALL);
+
+    assign local_err = !ctl_ready_s2 || !addr_ok || !align_ok || !strobe_ok;
+
+    // CDC request: held up for the whole transaction.
+    logic        cdc_req;
+    logic [25:0] cdc_addr;
+    logic [31:0] cdc_rdata;
+    logic        cdc_ack, cdc_err;
+
+    assign cdc_req  = (bus_q == StBusy);
+    assign cdc_addr = req.addr[26:1];
+
+    always_comb begin
+        bus_d = bus_q;
+
+        case (bus_q)
+            // Refuse locally (no transaction reaches the DRAM) or
+            // start one.
+            StIdle: begin
+                if (req.valid) begin
+                    if (local_err) bus_d = StDone;
+                    else           bus_d = StBusy;
+                end
+            end
+
+            // Wait for the DDR3 side to finish.
+            StBusy: begin
+                if (cdc_ack) bus_d = StDone;
+            end
+
+            // One cycle with rsp.ready high.
+            StDone: bus_d = StIdle;
+
+            default: bus_d = StIdle;
+        endcase
+    end
+
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) begin
+            bus_q     <= StIdle;
+            rsp.ready <= 1'b0;
+            rsp.rdata <= '0;
+            rsp.error <= 1'b0;
+        end else begin
+            bus_q     <= bus_d;
+            rsp.ready <= 1'b0;
+
+            if (bus_q == StIdle && req.valid && local_err) begin
+                rsp.ready <= 1'b1;
+                rsp.rdata <= '0;
+                rsp.error <= 1'b1;
+            end
+
+            if (bus_q == StBusy && cdc_ack) begin
+                rsp.ready <= 1'b1;
+                rsp.rdata <= cdc_rdata;
+                rsp.error <= cdc_err;
+            end
+        end
+    end
+
+
+
+    // ========================================================
+    // CROSSING
+    // ========================================================
+
+    logic        eng_req, eng_wr, eng_done, eng_err;
+    logic [25:0] eng_addr;
+    logic [31:0] eng_wdata, eng_rdata;
+
+    ddr3_cdc #(
+        .ADDR_W (26)
+    ) u_cdc (
+        .clk_s     (clk),
+        .rst_s     (rst),
+        .req       (cdc_req),
+        .addr      (cdc_addr),
+        .wr        (req.op == soc_pkg::BusWrite),
+        .wdata     (req.wdata),
+        .ack       (cdc_ack),
+        .rdata     (cdc_rdata),
+        .err       (cdc_err),
+
+        .clk_c     (clk_ddr),
+        .rst_c     (rst_ddr),
+        .cmd_req   (eng_req),
+        .cmd_addr  (eng_addr),
+        .cmd_wr    (eng_wr),
+        .cmd_wdata (eng_wdata),
+        .cmd_done  (eng_done),
+        .cmd_rdata (eng_rdata),
+        .cmd_err   (eng_err)
+    );
+
+    // ========================================================
+    // COMMAND ENGINE (clk_ddr domain)
+    // ========================================================
+    // One command at a time, always in the same shape:
+    //
+    //   step 0 : wait !busy, assert the command strobe
+    //   step 1 : wait busy          (the controller took it)
+    //   step 2 : wait data_ready    (reads only: latch ctl_dout)
+    //   step 3 : wait !busy         (command finished)
+    //
+    // then either repeat for the second halfword or report done.
+    // A watchdog turns a command that never finishes into a bus
+    // error instead of a hung SoC.
+    // --------------------------------------------------------
+
+    localparam int TIMEOUT = 1024;      // pclk cycles, ~10 us
+
+    typedef enum logic [2:0] {
+        EngIdle,
+        EngRefresh,
+        EngRd,
+        EngWr,
+        EngDone
+    } eng_state_e;
+
+    eng_state_e  eng_q,      eng_d;
+    logic [1:0]  step_q,     step_d;
+    logic        half_q,     half_d;
+    logic [25:0] base_q,     base_d;
+    logic [31:0] rdata_q,    rdata_d;
+    logic        ref_pending_q, ref_pending_d;
+    logic        ref_issued_q,  ref_issued_d;
+    logic [10:0] ref_cnt_q,  ref_cnt_d;
+    logic [10:0] to_cnt_q,   to_cnt_d;
+    logic        err_q,      err_d;
+
+    // Command strobes. They are combinational, but step_q advances
+    // on the same cycle, so each is high for exactly one cycle.
+    assign ctl_rd      = (eng_q == EngRd)      && (step_q == 2'd0) && !ctl_busy;
+    assign ctl_wr      = (eng_q == EngWr)      && (step_q == 2'd0) && !ctl_busy;
+    assign ctl_refresh = (eng_q == EngRefresh) && (step_q == 2'd0) && !ctl_busy;
+
+    // Halfword address and write data follow half_q, so the second
+    // half of a bus word is one increment away.
+    assign ctl_addr = base_q + {25'b0, half_q};
+    assign ctl_din  = half_q ? eng_wdata[31:16] : eng_wdata[15:0];
+
+    assign eng_rdata = rdata_q;
+    assign eng_err   = err_q;
+    assign eng_done  = (eng_q == EngDone);
+
+    always_comb begin
+        // Hold by default.
+        eng_d         = eng_q;
+        step_d        = step_q;
+        half_d        = half_q;
+        base_d        = base_q;
+        rdata_d       = rdata_q;
+        ref_pending_d = ref_pending_q;
+        ref_issued_d  = ref_issued_q;
+        ref_cnt_d     = ref_cnt_q + 11'd1;
+        to_cnt_d      = (eng_q == EngIdle) ? 11'd0 : to_cnt_q + 11'd1;
+        err_d         = (eng_q == EngIdle) ? 1'b0 : err_q;
+
+        // Refresh timer: one tick every 14 us at 99.56 MHz.
+        if (ref_cnt_q >= REFRESH_CYCLES[10:0]) begin
+            ref_cnt_d     = 11'd0;
+            ref_pending_d = 1'b1;
+        end
+
+        // Watchdog: a command that never completes.
+        if (to_cnt_q >= TIMEOUT[10:0]) begin
+            eng_d        = EngDone;
+            step_d       = 2'd0;
+            half_d       = 1'b0;
+            ref_issued_d = 1'b0;
+            err_d        = 1'b1;
+        end else begin
+
+            case (eng_q)
+
+                // Refresh has priority: it must not be starved by
+                // bus traffic, and it is cheap (about 5 pclk cycles).
+                EngIdle: begin
+                    if (ref_pending_q) begin
+                        eng_d  = EngRefresh;
+                        step_d = 2'd0;
+                    end else if (eng_req) begin
+                        base_d = eng_addr;
+                        half_d = 1'b0;
+                        step_d = 2'd0;
+                        if (eng_wr) eng_d = EngWr;
+                        else        eng_d = EngRd;
+                    end
+                end
+
+                EngRefresh: begin
+                    case (step_q)
+                        2'd0: step_d = 2'd1;
+                        2'd1: if (ctl_busy) step_d = 2'd3;
+                        2'd3: if (!ctl_busy) begin
+                                  ref_pending_d = 1'b0;
+                                  ref_cnt_d     = 11'd0;
+                                  eng_d         = EngIdle;
+                              end
+                        default: step_d = 2'd0;
+                    endcase
+                end
+
+                EngRd: begin
+                    case (step_q)
+                        // Issue the read for this halfword.
+                        2'd0: step_d = 2'd1;
+                        2'd1: if (ctl_busy) step_d = 2'd2;
+                        // Read data is valid on the data_ready cycle.
+                        2'd2: if (ctl_data_ready) begin
+                                  if (half_q) rdata_d[31:16] = ctl_dout;
+                                  else        rdata_d[15:0]  = ctl_dout;
+                                  step_d = 2'd3;
+                              end
+                        // Finished: second halfword, or done.
+                        // ctl_addr is base_q + half_q, so only the
+                        // half index changes here.
+                        2'd3: if (!ctl_busy) begin
+                                  if (!half_q) begin
+                                      half_d = 1'b1;
+                                      step_d = 2'd0;
+                                  end else begin
+                                      half_d = 1'b0;
+                                      eng_d  = EngDone;
+                                  end
+                              end
+                        default: step_d = 2'd0;
+                    endcase
+                end
+
+                EngWr: begin
+                    case (step_q)
+                        // Issue the write for this halfword. The
+                        // controller masks the rest of the burst.
+                        2'd0: step_d = 2'd1;
+                        2'd1: if (ctl_busy) step_d = 2'd3;
+                        2'd3: if (!ctl_busy) begin
+                                  if (!half_q) begin
+                                      half_d = 1'b1;
+                                      step_d = 2'd0;
+                                  end else begin
+                                      half_d = 1'b0;
+                                      eng_d  = EngDone;
+                                  end
+                              end
+                        default: step_d = 2'd0;
+                    endcase
+                end
+
+                // cmd_done pulses for exactly this one cycle.
+                EngDone: eng_d = EngIdle;
+
+                default: eng_d = EngIdle;
+
+            endcase
+        end
+    end
+
+    always_ff @(posedge clk_ddr or posedge rst_ddr) begin
+        if (rst_ddr) begin
+            eng_q         <= EngIdle;
+            step_q        <= 2'd0;
+            half_q        <= 1'b0;
+            base_q        <= '0;
+            rdata_q       <= '0;
+            ref_pending_q <= 1'b0;
+            ref_issued_q  <= 1'b0;
+            ref_cnt_q     <= '0;
+            to_cnt_q      <= '0;
+            err_q         <= 1'b0;
+        end else begin
+            eng_q         <= eng_d;
+            step_q        <= step_d;
+            half_q        <= half_d;
+            base_q        <= base_d;
+            rdata_q       <= rdata_d;
+            ref_pending_q <= ref_pending_d;
+            ref_issued_q  <= ref_issued_d;
+            ref_cnt_q     <= ref_cnt_d;
+            to_cnt_q      <= to_cnt_d;
+            err_q         <= err_d;
+        end
+    end
+
+endmodule
+
