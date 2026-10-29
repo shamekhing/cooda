@@ -65,6 +65,10 @@ module memory_ddr3 #(
     input  soc_pkg::bus_req_s target_req,
     output soc_pkg::bus_rsp_s target_rsp,
 
+    // Sticky "a DDR3 access failed" flag for board bring-up. It stays
+    // up until reset, so a transient error is still visible on an LED.
+    output logic        err_sticky,
+
     // ---------------- DDR3 controller domain ----------------
     input  logic        clk_ddr,
     input  logic        rst_ddr,
@@ -199,10 +203,17 @@ module memory_ddr3 #(
             target_rsp.ready <= 1'b0;
             target_rsp.rdata <= '0;
             target_rsp.error <= 1'b0;
+            err_sticky <= 1'b0;
         end else begin
             bus_q     <= bus_d;
             cal_wait_q<= cal_wait_d;
             target_rsp.ready <= 1'b0;
+
+            // Latch any failure for the bring-up LED.
+            if (bus_q == StBusy && cdc_ack && cdc_err)
+                err_sticky <= 1'b1;
+            if (bus_q == StIdle && target_req.valid && local_err)
+                err_sticky <= 1'b1;
 
             if (bus_q == StIdle && target_req.valid && !local_err) begin
                 req_addr_q  <= target_req.addr[26:1];

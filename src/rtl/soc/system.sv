@@ -29,7 +29,13 @@ module system #(
 
     output logic retire_valid,
     output logic illegal_instr,
-    output logic cpu_fault
+    output logic cpu_fault,
+
+    // DDR3 bring-up status for the board LEDs. All three are low when
+    // DDR3_ENABLE is 0.
+    output logic ddr_write_level_done,
+    output logic ddr_read_calib_done,
+    output logic ddr_err
 );
     soc_pkg::bus_req_s instr_req, data_req;
     soc_pkg::bus_rsp_s instr_rsp, data_rsp;
@@ -90,7 +96,8 @@ module system #(
                 .ctl_rd(ctl_rd), .ctl_wr(ctl_wr), .ctl_refresh(ctl_refresh),
                 .ctl_addr(ctl_addr), .ctl_din(ctl_din), .ctl_dout(ctl_dout),
                 .ctl_busy(ctl_busy), .ctl_data_ready(ctl_data_ready),
-                .ctl_ready(write_level_done && read_calib_done)
+                .ctl_ready(write_level_done && read_calib_done),
+                .err_sticky(ddr_err)
             );
 
             ddr3_controller u_ddr3_controller (
@@ -114,9 +121,15 @@ module system #(
                     DDR3_CK, DDR3_CKE, DDR3_nRESET, DDR3_DM, DDR3_ODT} = '0;
             assign DDR3_DQ  = 'z;
             assign DDR3_DQS = 'z;
+            assign write_level_done = 1'b0;
+            assign read_calib_done  = 1'b0;
+            assign ddr_err          = 1'b0;
         end
         if (DDR3_ENABLE) begin : gen_ddr3_response
             assign ddr_rsp = ddr_target_rsp;
         end
     endgenerate
+
+    assign ddr_write_level_done = write_level_done;
+    assign ddr_read_calib_done  = read_calib_done;
 endmodule

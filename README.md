@@ -41,6 +41,9 @@ models are not included here.
 - S1 (`btn_n0`) resets the CPU.
 - S2 (`btn_n1`) pauses execution while held.
 - LED0 indicates recent instruction retirement; LED1 indicates no CPU fault; LED2 indicates no illegal instruction.
+- LED3 indicates DDR3 write leveling done; LED4 indicates DDR3 read calibration done; LED5 indicates no latched DDR3 access error.
+
+The LEDs are active-low, so a lit LED means the condition is false. LED3 and LED4 lit together means DDR3 calibration never finished, and LED5 lit after a DDR3 access means that access failed.
 
 The physical pin assignments, including DDR3, are in `src/constraints/sipeed_tang_primer_20k.cst`; the 27 MHz clock constraint is in the matching `.sdc` file. The DDR3 pin map and PHY follow the [upstream Tang Primer 20K implementation](https://github.com/nand2mario/ddr3-tang-primer-20k).
 

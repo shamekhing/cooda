@@ -49,6 +49,7 @@ module ddr3_target_tb;
     logic        ctl_busy;
     logic        ctl_data_ready;
     logic        ctl_ready;
+    logic        err_sticky;
 
     int errors = 0;
     int checks = 0;
@@ -78,7 +79,8 @@ module ddr3_target_tb;
         .ctl_dout      (ctl_dout),
         .ctl_busy      (ctl_busy),
         .ctl_data_ready(ctl_data_ready),
-        .ctl_ready     (ctl_ready)
+        .ctl_ready     (ctl_ready),
+        .err_sticky    (err_sticky)
     );
 
     // ========================================================
@@ -285,6 +287,12 @@ module ddr3_target_tb;
             $display("FAIL pre-calibration: mem[8]=%04h mem[9]=%04h",
                      fake_mem[8], fake_mem[9]);
         end
+        // A successful access must not set the bring-up error flag.
+        checks++;
+        if (err_sticky !== 1'b0) begin
+            errors++;
+            $display("FAIL err_sticky set by a successful access");
+        end
 
         // 1b. A controller that never calibrates must produce an
         //     error rather than holding the bus forever.
@@ -317,6 +325,13 @@ module ddr3_target_tb;
         target_req.valid = 1'b0;
         ctl_ready = 1'b1;                   // back to a healthy controller
         repeat (5) @(negedge clk);
+
+        // The failed access must latch the bring-up error flag.
+        checks++;
+        if (err_sticky !== 1'b1) begin
+            errors++;
+            $display("FAIL err_sticky not set after a failed access");
+        end
 
         // 2. Calibrated: write, read back, and check the halfword
         //    order in the DRAM.

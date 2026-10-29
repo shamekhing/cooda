@@ -28,6 +28,7 @@ module fpga_top (
     logic [1:0] run_sync = 2'b00;
     logic rst, user_rst, run;
     logic retire_valid, illegal_instr, cpu_fault;
+    logic ddr_write_level_done, ddr_read_calib_done, ddr_err;
     logic [19:0] activity_count;
     logic ddr_pclk, ddr_fclk, ddr_ck, ddr_pll_lock;
     logic ddr_reset_async;
@@ -71,7 +72,10 @@ module fpga_top (
         .DDR3_CKE(DDR3_CKE), .DDR3_nRESET(DDR3_nRESET),
         .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT),
         .retire_valid(retire_valid),
-        .illegal_instr(illegal_instr), .cpu_fault(cpu_fault)
+        .illegal_instr(illegal_instr), .cpu_fault(cpu_fault),
+        .ddr_write_level_done(ddr_write_level_done),
+        .ddr_read_calib_done(ddr_read_calib_done),
+        .ddr_err(ddr_err)
     );
 
     always_ff @(posedge clk27) begin
@@ -84,7 +88,10 @@ module fpga_top (
     assign led0 = (activity_count == '0);
     assign led1 = ~cpu_fault;
     assign led2 = ~illegal_instr;
-    assign led3 = 1'b1;
-    assign led4 = 1'b1;
-    assign led5 = 1'b1;
+    // DDR3 bring-up: write leveling, read calibration, and a latched
+    // access error. A board with no working DRAM shows led3/led4 lit
+    // and led5 off; both lit means calibration never finished.
+    assign led3 = ~ddr_write_level_done;
+    assign led4 = ~ddr_read_calib_done;
+    assign led5 = ~ddr_err;
 endmodule
