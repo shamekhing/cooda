@@ -37,8 +37,8 @@ module cpu_decoder (
     output arch_pkg::word_t branch_target,
 
     // Stage 7 memory controls.
-    output logic memory_re,
-    output logic memory_we,
+    output logic memory_read_enable,
+    output logic memory_write_enable,
 
     output logic decode_valid,
     output logic illegal_instr
@@ -176,8 +176,8 @@ module cpu_decoder (
         branch_op    = OpJmp;
         branch_target    = '0;
 
-        memory_re  = 1'b0;
-        memory_we = 1'b0;
+        memory_read_enable = 1'b0;
+        memory_write_enable= 1'b0;
 
         decode_valid   = 1'b0;
         illegal_instr = 1'b1;
@@ -206,10 +206,10 @@ module cpu_decoder (
                 imm_sel = 1'b1;
 
                 if (load_qual) begin
-                    memory_re    = 1'b1;
+                    memory_read_enable   = 1'b1;
                     register_write_enable = 1'b1;
                 end else begin
-                    memory_we = 1'b1;
+                    memory_write_enable= 1'b1;
                 end
 
                 // Memory instructions do not update status flags.

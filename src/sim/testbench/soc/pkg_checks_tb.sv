@@ -11,8 +11,7 @@
 // be run.
 //
 // Covered: word geometry, register-file size, opcode width, instruction
-// width, ROM/RAM word divisibility, the whole address map (power-of-two
-// size, base alignment, no overlap), and GPU register geometry.
+// width and shared main-memory geometry.
 //
 // No bus stimulus is needed - pkg_checks is pure.
 // ============================================================
@@ -28,7 +27,7 @@ module pkg_checks_tb;
 
         #1;
 
-        $display("PASS: package invariants - word geometry, opcode width, ROM/RAM sizing, address map, GPU regs");
+        $display("PASS: package invariants - word geometry, opcode width, shared main-memory sizing");
 
         $finish;
 

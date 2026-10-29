@@ -29,12 +29,12 @@ module cpu_program (
     input  logic        rst,
     input  logic        run,
 
-    output soc_pkg::bus_req_s instr_req,
-    input  soc_pkg::bus_rsp_s instr_rsp,
-
     input  logic            retire,
     input  arch_pkg::word_t operand_a,
     input  arch_pkg::word_t operand_b,
+
+    input  soc_pkg::bus_rsp_s instr_rsp,
+    output soc_pkg::bus_req_s instr_req,
 
     output isa_pkg::program_ctrl_s ctrl,
     output logic        valid,
@@ -65,8 +65,8 @@ module cpu_program (
     logic register_write_enable;
     logic flags_write_enable;
 
-    logic memory_re;
-    logic memory_we;
+    logic memory_read_enable;
+    logic memory_write_enable;
 
     logic decode_valid;
     logic decode_illegal;
@@ -161,8 +161,8 @@ module cpu_program (
         .branch_op             (branch_op),
         .branch_target         (branch_target),
 
-        .memory_re             (memory_re),
-        .memory_we             (memory_we),
+        .memory_read_enable            (memory_read_enable),
+        .memory_write_enable            (memory_write_enable),
 
         .decode_valid          (decode_valid),
         .illegal_instr         (decode_illegal)
@@ -184,8 +184,8 @@ module cpu_program (
     assign ctrl.register_write_enable = register_write_enable;
     assign ctrl.flags_write_enable    = flags_write_enable;
 
-    assign ctrl.memory_re             = memory_re;
-    assign ctrl.memory_we             = memory_we;
+    assign ctrl.memory_read_enable            = memory_read_enable;
+    assign ctrl.memory_write_enable            = memory_write_enable;
 
     assign ctrl.decode_valid          = decode_valid;
 

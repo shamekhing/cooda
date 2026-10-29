@@ -1,14 +1,11 @@
 // ============================================================
-// memory_bsram  one on-chip block RAM, as an RPU slave
+// memory_bsram  one on-chip shared CPU instruction/data memory
 // ============================================================
 //
 // PHYSICAL LAYER. A plain read/write block RAM and nothing else:
 // no notion of "instruction" or "data", and no read-only mode.
 // A BSRAM is read/write by nature. Whether a region is writable is
-// decided by which master the address map routes to it, not by the
-// memory: the instruction master only ever reads, and the map never
-// points a data master at the initialised block, so the code region
-// is read-only by construction rather than by a flag here.
+// The initialised program and writable data share this array.
 //
 // INIT_FILE optionally preloads the array at configuration time.
 //

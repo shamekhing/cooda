@@ -5,6 +5,7 @@
     <Version>5</Version>
     <Device name="GW2A-18C" pn="GW2A-LV18PG256C8/I7">gw2a18c-011</Device>
     <FileList>
+        <File path="src/rtl/bus/bus_arbiter.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/cpu/alu/cpu_alu.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/cpu/alu/cpu_alu_arithmetic.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/cpu/alu/cpu_alu_comparator.sv" type="file.verilog" enable="1"/>
@@ -20,31 +21,14 @@
         <File path="src/rtl/cpu/program/cpu_fetch.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/cpu/program/cpu_pc.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/cpu/program/cpu_program.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/gpu/gpu.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/gpu/gpu_bus_mon.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/gpu/gpu_pixel_engine.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/gpu/gpu_registers.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/hdmi/hdmi_rpll.v" type="file.verilog" enable="1"/>
-        <File path="src/rtl/hdmi/hdmi_tmds_encoder.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/hdmi/hdmi_tmds_serializer.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/hdmi/hdmi_tx.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory_bsram.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/memory/memory_ddr3.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/memory/memory_ddr3_phy.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/alu_pkg.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/arch_pkg.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/packages/gpu_pkg.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/isa_pkg.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/soc_pkg.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/rpu/rpu.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/rpu/rpu_slave_port.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/soc/fpga_top.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/soc/system.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/pattern_gen.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/video_lcd.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/video_rpll.v" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/video_timing.sv" type="file.verilog" enable="1"/>
         <File path="src/constraints/sipeed_tang_primer_20k.cst" type="file.cst" enable="1"/>
         <File path="src/constraints/sipeed_tang_primer_20k.sdc" type="file.sdc" enable="1"/>
         <File path="src/programs/boot_program.hex" type="file.other" enable="1"/>

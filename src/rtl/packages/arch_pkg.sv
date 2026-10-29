@@ -9,7 +9,7 @@
 // Compile first. This file also carries the project-wide
 // `timescale: Icarus applies it to every file compiled after.
 //
-// Dependency order:  arch -> isa, alu, soc -> gpu
+// Dependency order:  arch -> isa, alu, soc
 // ============================================================
 
 package arch_pkg;
@@ -55,6 +55,7 @@ package arch_pkg;
 
     typedef enum logic [3:0] {
         CtlIdle,       // No operation
+        CtlValid,      // Valid instruction
         CtlWait,       // Waiting/stalled
         CtlCapture,    // Latch request/input
         CtlRead,       // Read/acquire data

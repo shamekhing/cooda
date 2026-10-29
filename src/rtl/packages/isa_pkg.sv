@@ -269,8 +269,8 @@ package isa_pkg;
         logic      register_write_enable;
         logic      flags_write_enable;
 
-        logic      memory_re;
-        logic      memory_we;
+        logic      memory_read_enable;
+        logic      memory_write_enable;
 
         logic      decode_valid;
     } program_ctrl_s;
