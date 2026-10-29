@@ -25,11 +25,14 @@
 //   2^27 bytes = 128 MiB, the whole fitted DRAM.
 //
 // REFRESH
-//   The controller leaves refresh scheduling to its client: the
-//   DRAM needs one auto-refresh every 15.6 us. A pclk counter
-//   raises ref_pending every REFRESH_CYCLES (14 us), and the
-//   engine issues it as soon as the current command finishes, so
-//   a refresh is never starved by bus traffic.
+//   The controller leaves refresh scheduling to its client. A 1 Gb
+//   DDR3 part needs 8192 auto-refreshes per 64 ms, i.e. tREFI =
+//   7.8 us, so a pclk counter raises ref_pending every
+//   REFRESH_CYCLES (7.5 us at 99.56 MHz, a little inside tREFI) and
+//   the engine issues it as soon as the current command finishes.
+//   Refresh has priority in EngIdle, so bus traffic cannot starve
+//   it; a refresh that fails leaves the timer to retry rather than
+//   blocking the bus path (see the watchdog below).
 //
 // TWO CLOCK DOMAINS
 //   clk / rst        : 27 MHz SoC side, the bus contract
@@ -39,9 +42,11 @@
 // ============================================================
 
 module memory_ddr3 #(
-    // pclk cycles between refreshes. 99.56 MHz / 1400 = 14 us,
-    // comfortably inside the 15.6 us the DRAM needs.
-    parameter int REFRESH_CYCLES = 1400
+    // pclk cycles between refreshes. 99.56 MHz / 750 = 7.53 us, just
+    // inside the 7.8 us tREFI a 1 Gb DDR3 part requires (8192
+    // refreshes per 64 ms). At 750 the DRAM sees ~8500 refreshes per
+    // 64 ms, so there is margin for the issue latency too.
+    parameter int REFRESH_CYCLES = 750
 ) (
     // ---------------- SoC domain ----------------
     input  logic        clk,
@@ -251,13 +256,13 @@ module memory_ddr3 #(
     logic [25:0] base_q,     base_d;
     logic [31:0] rdata_q,    rdata_d;
     logic        ref_pending_q, ref_pending_d;
-    logic        ref_issued_q,  ref_issued_d;
     logic [10:0] ref_cnt_q,  ref_cnt_d;
     logic [10:0] to_cnt_q,   to_cnt_d;
     logic        err_q,      err_d;
 
-    // Command strobes. They are combinational, but step_q advances
-    // on the same cycle, so each is high for exactly one cycle.
+    // Command strobes. A step only advances once the controller has
+    // actually taken the command (ctl_busy high), so a strobe that
+    // was gated off by ctl_busy is retried instead of being lost.
     assign ctl_rd      = (eng_q == EngRd)      && (step_q == 2'd0) && !ctl_busy;
     assign ctl_wr      = (eng_q == EngWr)      && (step_q == 2'd0) && !ctl_busy;
     assign ctl_refresh = (eng_q == EngRefresh) && (step_q == 2'd0) && !ctl_busy;
@@ -279,24 +284,32 @@ module memory_ddr3 #(
         base_d        = base_q;
         rdata_d       = rdata_q;
         ref_pending_d = ref_pending_q;
-        ref_issued_d  = ref_issued_q;
         ref_cnt_d     = ref_cnt_q + 11'd1;
         to_cnt_d      = (eng_q == EngIdle) ? 11'd0 : to_cnt_q + 11'd1;
         err_d         = (eng_q == EngIdle) ? 1'b0 : err_q;
 
-        // Refresh timer: one tick every 14 us at 99.56 MHz.
+        // Refresh timer: one tick every REFRESH_CYCLES (7.5 us at
+        // 99.56 MHz, inside the 7.8 us tREFI of a 1 Gb DDR3 part).
         if (ref_cnt_q >= REFRESH_CYCLES[10:0]) begin
             ref_cnt_d     = 11'd0;
             ref_pending_d = 1'b1;
         end
 
-        // Watchdog: a command that never completes.
-        if (to_cnt_q >= TIMEOUT[10:0]) begin
-            eng_d        = EngDone;
-            step_d       = 2'd0;
-            half_d       = 1'b0;
-            ref_issued_d = 1'b0;
-            err_d        = 1'b1;
+        // Watchdog: a command that never completes. Report the error
+        // and drop any pending refresh, so a controller that is stuck
+        // cannot leave refresh holding the bus path hostage; the
+        // refresh timer will raise it again.
+        //
+        // EngDone is excluded: it is the one-cycle error-report state,
+        // and letting the watchdog pre-empt its exit would trap the
+        // engine there until to_cnt wrapped, answering every later
+        // access with a stale error.
+        if (to_cnt_q >= TIMEOUT[10:0] && eng_q != EngDone) begin
+            eng_d         = EngDone;
+            step_d        = 2'd0;
+            half_d        = 1'b0;
+            ref_pending_d = 1'b0;
+            err_d         = 1'b1;
         end else begin
 
             case (eng_q)
@@ -318,7 +331,7 @@ module memory_ddr3 #(
 
                 EngRefresh: begin
                     case (step_q)
-                        2'd0: step_d = 2'd1;
+                        2'd0: if (!ctl_busy) step_d = 2'd1;
                         2'd1: if (ctl_busy) step_d = 2'd3;
                         2'd3: if (!ctl_busy) begin
                                   ref_pending_d = 1'b0;
@@ -331,8 +344,9 @@ module memory_ddr3 #(
 
                 EngRd: begin
                     case (step_q)
-                        // Issue the read for this halfword.
-                        2'd0: step_d = 2'd1;
+                        // Issue the read for this halfword; retry if
+                        // the controller was still busy.
+                        2'd0: if (!ctl_busy) step_d = 2'd1;
                         2'd1: if (ctl_busy) step_d = 2'd2;
                         // Read data is valid on the data_ready cycle.
                         2'd2: if (ctl_data_ready) begin
@@ -358,9 +372,10 @@ module memory_ddr3 #(
 
                 EngWr: begin
                     case (step_q)
-                        // Issue the write for this halfword. The
+                        // Issue the write for this halfword; retry if
+                        // the controller was still busy. The
                         // controller masks the rest of the burst.
-                        2'd0: step_d = 2'd1;
+                        2'd0: if (!ctl_busy) step_d = 2'd1;
                         2'd1: if (ctl_busy) step_d = 2'd3;
                         2'd3: if (!ctl_busy) begin
                                   if (!half_q) begin
@@ -392,7 +407,6 @@ module memory_ddr3 #(
             base_q        <= '0;
             rdata_q       <= '0;
             ref_pending_q <= 1'b0;
-            ref_issued_q  <= 1'b0;
             ref_cnt_q     <= '0;
             to_cnt_q      <= '0;
             err_q         <= 1'b0;
@@ -403,7 +417,6 @@ module memory_ddr3 #(
             base_q        <= base_d;
             rdata_q       <= rdata_d;
             ref_pending_q <= ref_pending_d;
-            ref_issued_q  <= ref_issued_d;
             ref_cnt_q     <= ref_cnt_d;
             to_cnt_q      <= to_cnt_d;
             err_q         <= err_d;

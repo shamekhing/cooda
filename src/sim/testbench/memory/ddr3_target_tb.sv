@@ -91,7 +91,9 @@ module ddr3_target_tb;
     logic [3:0]  busy_cnt;
     logic        rd_active;             // a read is in flight
     logic        stall;
+    logic        hold_busy_en;          // busy while idle, no command taken
     int          n_rd, n_wr, n_ref;
+    int          pclk_cycles;           // free-running pclk counter
 
     always_comb begin
         ctl_dout = rd_data;
@@ -104,11 +106,19 @@ module ddr3_target_tb;
             busy_cnt      <= 4'd0;
             rd_active     <= 1'b0;
             rd_data       <= 16'h0;
+            pclk_cycles   <= 0;
         end else begin
             ctl_data_ready <= 1'b0;
+            pclk_cycles    <= pclk_cycles + 1;
 
             if (!ctl_busy) begin
-                if (ctl_rd || ctl_wr || ctl_refresh) begin
+                // Hold the controller busy without taking a command,
+                // which is what the engine's step 0 must retry
+                // through rather than advance past.
+                if (hold_busy_en) begin
+                    ctl_busy <= 1'b1;
+                    busy_cnt <= 4'd15;
+                end else if (ctl_rd || ctl_wr || ctl_refresh) begin
                     ctl_busy <= 1'b1;
                     busy_cnt <= ctl_refresh ? 4'd4 : 4'd9;
                     if (ctl_rd) begin
@@ -173,6 +183,9 @@ module ddr3_target_tb;
         if (err_v !== 1'b0) begin
             errors++;
             $display("FAIL %s: unexpected error on read", name);
+            $display("  eng=%0d step=%0d half=%b to_cnt=%0d refpend=%b busy=%b",
+                     dut.eng_q, dut.step_q, dut.half_q, dut.to_cnt_q,
+                     dut.ref_pending_q, ctl_busy);
         end else if (rd_v !== exp) begin
             errors++;
             $display("FAIL %s: got %08h expected %08h", name, rd_v, exp);
@@ -223,6 +236,7 @@ module ddr3_target_tb;
     initial begin
         target_req = '0;
         stall = 1'b0;
+        hold_busy_en = 1'b0;
         ctl_ready = 1'b0;
         n_rd = 0; n_wr = 0; n_ref = 0;
         for (int i = 0; i < 1024; i++) fake_mem[i] = 16'h0;
@@ -331,6 +345,55 @@ module ddr3_target_tb;
         end
         stall = 1'b0;
         repeat (200) @(negedge clk);
+
+        // 6. Recovery: once the controller is healthy again the target
+        //    must work. A stuck controller that left a refresh pending
+        //    used to keep refresh holding the bus path hostage.
+        expect_read(32'h0000_0010, 32'h1000_0027, "recovered after watchdog");
+
+        // 7. Command retry: hold the controller busy while it is idle,
+        //    with no command taken. The engine's step 0 must wait for
+        //    ctl_busy to fall and then issue, not advance past the
+        //    command (which used to lose it and end in a watchdog
+        //    error).
+        hold_busy_en = 1'b1;
+        @(negedge clk);
+        target_req.valid = 1'b1;
+        target_req.op    = soc_pkg::BusWrite;
+        target_req.addr  = 32'h0000_0050;
+        target_req.wdata = 32'hCAFE_F00D;
+        target_req.wstrb = BUS_STRB_ALL;
+        repeat (30) @(negedge clk);         // engine waits in step 0
+        hold_busy_en = 1'b0;                // release the controller
+        while (!target_rsp.ready) @(negedge clk);
+        checks++;
+        if (target_rsp.error !== 1'b0) begin
+            errors++;
+            $display("FAIL busy-retry: unexpected error");
+        end
+        @(negedge clk);
+        target_req.valid = 1'b0;
+        if (fake_mem[40] !== 16'hF00D || fake_mem[41] !== 16'hCAFE) begin
+            errors++;
+            $display("FAIL busy-retry: mem[40]=%04h mem[41]=%04h",
+                     fake_mem[40], fake_mem[41]);
+        end
+
+        // 8. Refresh rate: while idle, refreshes must keep coming at
+        //    the programmed period (REFRESH_CYCLES pclk cycles), not
+        //    at whatever rate traffic happens to allow.
+        repeat (20) @(negedge clk);
+        n_ref = 0;
+        repeat (1000) @(negedge clk_ddr);
+        checks++;
+        // 1000 / 64 = 15.6 expected.
+        if (n_ref < 13 || n_ref > 18) begin
+            errors++;
+            $display("FAIL refresh rate: %0d refreshes in 1000 pclk cycles",
+                     n_ref);
+        end else begin
+            $display("  refresh rate: %0d refreshes per 1000 pclk cycles", n_ref);
+        end
 
         if (errors == 0)
             $display("PASS: ddr3_target %0d checks (%0d rd, %0d wr, %0d ref)",
