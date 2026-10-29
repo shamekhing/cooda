@@ -43,3 +43,7 @@ models are not included here.
 - LED0 indicates recent instruction retirement; LED1 indicates no CPU fault; LED2 indicates no illegal instruction.
 
 The physical pin assignments, including DDR3, are in `src/constraints/sipeed_tang_primer_20k.cst`; the 27 MHz clock constraint is in the matching `.sdc` file. The DDR3 pin map and PHY follow the [upstream Tang Primer 20K implementation](https://github.com/nand2mario/ddr3-tang-primer-20k).
+
+## Timing constraints
+
+The SDC names the rPLL outputs explicitly: DDR serializer `fclk` at 398.25 MHz, controller `pclk` at 99.563 MHz, and phase-shifted DDR `ck` at 398.25 MHz. It excludes the `clk27`/`pclk` bus CDC paths and the `pclk`-to-`fclk` hard-PHY interface paths; same-clock fabric paths remain timed. A Gowin synthesis and place-and-route run completed with zero setup or hold violations. The reported worst setup slack was +1.891 ns and worst hold slack was +0.334 ns.
