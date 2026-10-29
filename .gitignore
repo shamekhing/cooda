@@ -13,3 +13,6 @@
 examples/
 src/sim/build/
 src/sim/waveforms/
+data/
+src/sim/vendor/ddr3/
+src/sim/vendor/prim_sim.v

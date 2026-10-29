@@ -21,8 +21,12 @@
         <File path="src/rtl/cpu/program/cpu_fetch.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/cpu/program/cpu_pc.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/cpu/program/cpu_program.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/ddr3/ddr3_cdc.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/ddr3/ddr3_controller.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/ddr3/ddr3_pll.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory_bsram.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/memory_ddr3.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/alu_pkg.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/arch_pkg.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/isa_pkg.sv" type="file.verilog" enable="1"/>
