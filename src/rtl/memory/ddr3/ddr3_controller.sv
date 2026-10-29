@@ -9,11 +9,8 @@
 //   (c) nand2mario, 2022.9, Apache-2.0 - see LICENSE in this
 //   directory. Written for NESTang on this exact board.
 //
-// The only change from upstream is the file extension: the
-// original is src/ddr3_controller.v and is already
-// SystemVerilog-flavoured (typedef logic, SV casts), so the
-// rename is enough. Do not edit beyond integration fixes; take
-// fixes upstream instead.
+// Local changes are limited to SoC integration and Gowin synthesis
+// warning fixes. Prefer upstream fixes for controller behavior changes.
 //
 // WHAT IT IS
 //   A single 16-bit-word DDR3 controller with no bursting. It
@@ -148,8 +145,8 @@ module ddr3_controller
     input      [15:0] din,          // 16-bit data input
     output    [15:0]  dout,         // word output
     output    [127:0] dout128,      // 128-bit data output
-    output reg        data_ready = 1'b0,   // available 6 cycles after wr is set
-    output reg        busy = 1'b1,  // 0: ready for next command
+    output reg        data_ready,   // available 6 cycles after wr is set
+    output reg        busy,  // 0: ready for next command
 
     // Write leveling. This is done after mode registers are set.
     output            write_level_done,  // 1 means write leveling is successful for this DQS
@@ -307,7 +304,7 @@ always @(posedge pclk) begin
   if (rst_lock_n) begin
     cycle <= cycle == 5'd31 ? 5'd31 : cycle + 4'd1;
     tick <= tick_counter == 16'd1;
-    tick_counter <= tick_counter == 0 ? 0 : tick_counter - 16'd1;
+    tick_counter <= tick_counter == 16'd0 ? 16'd0 : tick_counter - 16'd1;
 
     // defaults
     {nRAS[0], nCAS[0], nWE[0]} <= CMD_NOP; {nRAS[1], nCAS[1], nWE[1]} <= CMD_NOP;
@@ -385,8 +382,8 @@ always @(posedge pclk) begin
             BA[0] <= addr[ROW_WIDTH+COL_WIDTH+BANK_WIDTH-1 : ROW_WIDTH+COL_WIDTH];    // bank id
             A[0] <= addr[ROW_WIDTH+COL_WIDTH-1:COL_WIDTH];      // 12-bit row address
             state <= rd ? READ : WRITE;
-            if (rd) cnt_read <= cnt_read == 8'hff ? 8'hff : cnt_read + 1;
-            if (wr) cnt_write <= cnt_write == 8'hff ? 8'hff : cnt_write + 1;
+            if (rd) cnt_read <= cnt_read == 8'hff ? 8'hff : cnt_read + 8'd1;
+            if (wr) cnt_write <= cnt_write == 8'hff ? 8'hff : cnt_write + 8'd1;
             cycle <= 4'd1;
             busy <= 1'b1;
             if (rd) dqs_hold <= 1'b1;       // reset WPOINT/RPOINT
@@ -527,7 +524,9 @@ always @(posedge pclk) begin
         // Write Leveling
         // After tWLDQSEN(25nck), drive DQS low. After tWLMRD (40nCK), pulse DQS, then after tWLO (7.2ns) feedback is provide on prime DQ
         {WRITE_LEVELING, FIVEB'(0)}: begin
+`ifdef SIM
             $display("Entering WRITE LEVELING");
+`endif
             // enter write leveling mode
             {nRAS[0], nCAS[0], nWE[0]} <= CMD_SetModeReg;
             // MR1[9,6,2]=001, RTT_NOM=60ohm, as dynamic ODT is not available in write leveling
@@ -548,7 +547,9 @@ always @(posedge pclk) begin
             dqs_oen[0:3] <= 4'b0;
         end
         {WRITE_LEVELING, FIVEB'(WLMRD/4)}: begin
+`ifdef SIM
             $display("wstep=%d", wstep);
+`endif
             dqs_out[0:7] <= 8'b1010_1010;       // provide a test pulse
             dqs_oen[0:3] <= 4'b0;                    
         end
@@ -564,7 +565,9 @@ always @(posedge pclk) begin
                 wlevel_cnt <= wlevel_cnt + 1'b1;
                 // test WLEVEL_COUNT times before we commit
                 if (wlevel_cnt == NIB'(WLEVEL_COUNT-1'b1)) begin
+`ifdef SIM
                     $display("Write leveling process finished.");
+`endif
                     wlevel_done <= 1'b1;
                     // Exit write leveling mode
                     {nRAS[0], nCAS[0], nWE[0]} <= CMD_SetModeReg;
@@ -587,7 +590,9 @@ always @(posedge pclk) begin
         // Issues BL8 read commands while adjusting rclkpos (0-3), rclksel (0-7)
         // until we see rburst pulse after the read. Then read calibration is achieved.
         {READ_CALIB, FIVEB'(0)}: begin
+`ifdef SIM
             $display("Entering READ CALIBRATION");
+`endif
             // activate bank 0
             {nRAS[0], nCAS[0], nWE[0]} <= CMD_BankActivate;
             BA[0] <= 0; A[0] <= 0;
@@ -604,7 +609,9 @@ always @(posedge pclk) begin
         end
         {READ_CALIB, FIVEB'(RCD/4)}: begin
             // issue read
+`ifdef SIM
             $display("rclkpos=%d, rclksel=%d", rclkpos, rclksel);
+`endif
             {nRAS[2], nCAS[2], nWE[2]} <= CMD_Read;
             A[2][12] <= 1'b1;                   // BL8 burst length
             A[2][10] <= 1'b0;                   // NO auto precharge
@@ -631,7 +638,9 @@ always @(posedge pclk) begin
         end
         {READ_CALIB, FIVEB'(RCD/4+10+RP/4)}: begin
             // Precharge is finished. Exit read calibration. Initialization is all done.
+`ifdef SIM
             $display("All initialization DONE...");
+`endif
             busy <= 1'b0;
             state <= IDLE;
         end
@@ -639,6 +648,10 @@ always @(posedge pclk) begin
   end else if (~rst_lock_n) begin
         busy <= 1'b1;
         data_ready <= 1'b0;
+        dq_out[0] <= 16'b0; dq_out[1] <= 16'b0;
+        dq_out[2] <= 16'b0; dq_out[3] <= 16'b0;
+        dq_out[4] <= 16'b0; dq_out[5] <= 16'b0;
+        dq_out[6] <= 16'b0; dq_out[7] <= 16'b0;
         DDR3_CKE <= 1'b0;
        {nRAS[0], nCAS[0], nWE[0]} <= CMD_NOP;
        {nRAS[1], nCAS[1], nWE[1]} <= CMD_NOP;
@@ -698,7 +711,7 @@ DLL #(
     .SCAL_EN("true"), .CODESCAL("101")     // 68-degree phase shift
 //    .SCAL_EN("false")                     // 90° phase shift
 ) dll(
-    .CLKIN(fclk), .RESET(~resetn), .STOP(0), 
+    .CLKIN(fclk), .RESET(~resetn), .STOP(1'b0),
     .UPDNCNTL(1'b0), .STEP(dllstep), .LOCK(dlllock)
 );
 `endif
@@ -719,6 +732,7 @@ generate
         ) u_dqs (
             .FCLK(fclk), .PCLK(pclk), .DQSIN(DDR3_DQS[i0]), .RESET(~rst_lock_n), .HOLD(dqs_hold), 
             .RLOADN(1'b0), .WLOADN(1'b0), .RMOVE(1'b0), .WMOVE(1'b0),
+            .RDIR(1'b0), .WDIR(1'b0),
             .DLLSTEP(dllstep), .WSTEP(wstep),        // 0.625/0.025
             .RCLKSEL(rclksel), .READ(dqs_read),
             .DQSR90(clk_dqsr[i0]), .WPOINT(dqs_waddr[i0]), .RPOINT(dqs_raddr[i0]), 
@@ -769,46 +783,55 @@ generate
         OSER8_MEM #(.TCLK_SOURCE("DQSW270")) oser_dm(
             .D0(dm_out[0]), .D1(dm_out[1]), .D2(dm_out[2]), .D3(dm_out[3]), 
             .D4(dm_out[4]), .D5(dm_out[5]), .D6(dm_out[6]), .D7(dm_out[7]), 
+            .TX0(1'b0), .TX1(1'b0), .TX2(1'b0), .TX3(1'b0),
             .FCLK(fclk), .PCLK(pclk), .TCLK(clk_dqsw270[i2]), .RESET(~rst_lock_n), .Q0(DDR3_DM[i2])
         );
     end
 endgenerate
 
 // CK speed output for nRAS, nCAS, nWE
+wire [2:0] command_serdes_q1_unused;
 OSER8 oser_nras(
     .D0(nRAS[0]), .D1(nRAS[0]), .D2(nRAS[1]), .D3(nRAS[1]), 
     .D4(nRAS[2]), .D5(nRAS[2]), .D6(nRAS[3]), .D7(nRAS[3]), 
-    .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_nRAS)
+    .TX0(1'b0), .TX1(1'b0), .TX2(1'b0), .TX3(1'b0),
+    .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_nRAS), .Q1(command_serdes_q1_unused[0])
 );
 OSER8 oser_ncas(
     .D0(nCAS[0]), .D1(nCAS[0]), .D2(nCAS[1]), .D3(nCAS[1]), 
     .D4(nCAS[2]), .D5(nCAS[2]), .D6(nCAS[3]), .D7(nCAS[3]), 
-    .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_nCAS)
+    .TX0(1'b0), .TX1(1'b0), .TX2(1'b0), .TX3(1'b0),
+    .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_nCAS), .Q1(command_serdes_q1_unused[1])
 );
 OSER8 oser_nwe(
     .D0(nWE[0]), .D1(nWE[0]), .D2(nWE[1]), .D3(nWE[1]), 
     .D4(nWE[2]), .D5(nWE[2]), .D6(nWE[3]), .D7(nWE[3]), 
-    .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_nWE)
+    .TX0(1'b0), .TX1(1'b0), .TX2(1'b0), .TX3(1'b0),
+    .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_nWE), .Q1(command_serdes_q1_unused[2])
 );
 
 // Address lines (CK speed)
 generate
+    wire [ROW_WIDTH-1:0] address_serdes_q1_unused;
     for (genvar i3 = 0; i3 < ROW_WIDTH; i3++) begin: gen_a
         OSER8 oser_a(
             .D0(A[0][i3]), .D1(A[0][i3]), .D2(A[1][i3]), .D3(A[1][i3]), 
             .D4(A[2][i3]), .D5(A[2][i3]), .D6(A[3][i3]), .D7(A[3][i3]), 
-            .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_A[i3])
+            .TX0(1'b0), .TX1(1'b0), .TX2(1'b0), .TX3(1'b0),
+            .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_A[i3]), .Q1(address_serdes_q1_unused[i3])
         );
     end
 endgenerate
 
 // BA lines (CK speed)
 generate
+    wire [BANK_WIDTH-1:0] bank_serdes_q1_unused;
     for (genvar i4 = 0; i4 < 3; i4++) begin: gen_ba
         OSER8 oser_ba(
             .D0(BA[0][i4]), .D1(BA[0][i4]), .D2(BA[1][i4]), .D3(BA[1][i4]), 
             .D4(BA[2][i4]), .D5(BA[2][i4]), .D6(BA[3][i4]), .D7(BA[3][i4]), 
-            .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_BA[i4])
+            .TX0(1'b0), .TX1(1'b0), .TX2(1'b0), .TX3(1'b0),
+            .FCLK(fclk), .PCLK(pclk), .RESET(~rst_lock_n), .Q0(DDR3_BA[i4]), .Q1(bank_serdes_q1_unused[i4])
         );
     end
 endgenerate

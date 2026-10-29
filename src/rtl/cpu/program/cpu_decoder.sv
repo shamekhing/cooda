@@ -63,7 +63,9 @@ module cpu_decoder (
     // Packed struct overlay: no hardcoded instruction bit slicing here.
     // Opcode classification is provided by the isa_pkg helpers.
     // ------------------------------------------------------------
-    assign instr_fields = instruction;
+    // The packed decode view excludes the six reserved high bits; those are
+    // checked separately below before the instruction is accepted.
+    assign instr_fields = instruction_s'(instruction);
 
     // ------------------------------------------------------------
     // Validate opcode and operand format.

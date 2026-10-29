@@ -38,7 +38,8 @@ module system #(
     soc_pkg::bus_req_s target_req;
     soc_pkg::bus_rsp_s target_rsp;
     soc_pkg::bus_req_s ddr_req;
-    soc_pkg::bus_rsp_s ddr_rsp;
+    wire soc_pkg::bus_rsp_s ddr_rsp;
+    soc_pkg::bus_rsp_s ddr_target_rsp;
 
     logic ctl_rd, ctl_wr, ctl_refresh;
     logic [25:0] ctl_addr;
@@ -84,7 +85,7 @@ module system #(
         if (DDR3_ENABLE) begin : gen_ddr3
             memory_ddr3 u_ddr3_memory (
                 .clk(clk), .rst(rst), .target_req(ddr_req),
-                .target_rsp(ddr_rsp),
+                .target_rsp(ddr_target_rsp),
                 .clk_ddr(ddr_pclk), .rst_ddr(ddr_rst),
                 .ctl_rd(ctl_rd), .ctl_wr(ctl_wr), .ctl_refresh(ctl_refresh),
                 .ctl_addr(ctl_addr), .ctl_din(ctl_din), .ctl_dout(ctl_dout),
@@ -108,15 +109,14 @@ module system #(
                 .rclkpos(rclkpos), .rclksel(rclksel), .debug(ddr_debug)
             );
         end else begin : gen_no_ddr3
-            always_comb begin
-                ddr_rsp = '0;
-                ddr_rsp.ready = ddr_req.valid;
-                ddr_rsp.error = ddr_req.valid;
-            end
+            assign ddr_rsp = {ddr_req.valid, arch_pkg::word_t'(0), ddr_req.valid};
             assign {DDR3_A, DDR3_BA, DDR3_nRAS, DDR3_nCAS, DDR3_nWE,
                     DDR3_CK, DDR3_CKE, DDR3_nRESET, DDR3_DM, DDR3_ODT} = '0;
             assign DDR3_DQ  = 'z;
             assign DDR3_DQS = 'z;
+        end
+        if (DDR3_ENABLE) begin : gen_ddr3_response
+            assign ddr_rsp = ddr_target_rsp;
         end
     endgenerate
 endmodule
