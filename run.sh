@@ -6,8 +6,8 @@
 #   ./run.sh --no-gui     run the regression without GTKWave
 #   ./run.sh --help       show usage
 #
-# The regression runs package invariants, video unit testbenches, and a
-# system boot smoke test under Icarus.
+# The regression runs package invariants, the ALU differential test, the
+# program-level CPU test, and the system boot smoke test under Icarus.
 #
 # Compile order lives in filelist.f. The Gowin project's FileList mirrors
 # it - keep the two in step.
@@ -21,7 +21,7 @@ for arg in "$@"; do
             ;;
         --help|-h)
             echo "usage: $0 [--no-gui]"
-            echo "  runs the package invariant checks."
+            echo "  runs the package invariants, ALU, CPU and boot tests."
             exit 0
             ;;
         *)
@@ -60,18 +60,16 @@ run_test "PACKAGE INVARIANTS" pkg_checks_tb pkg_checks_sim pkg_checks.vcd \
     src/sim/pkg_checks.sv \
     src/sim/testbench/soc/pkg_checks_tb.sv
 
-run_test "VIDEO TIMING" video_timing_tb video_timing_sim video_timing.vcd \
-    src/rtl/video/video_timing.sv \
-    src/sim/testbench/video/video_timing_tb.sv
+run_test "ALU DIFFERENTIAL" alu_tb alu_sim alu.vcd \
+    -f filelist.f \
+    src/sim/testbench/cpu/alu_tb.sv
 
-run_test "PATTERN GEN" pattern_gen_tb pattern_gen_sim pattern_gen.vcd \
-    src/rtl/video/pattern_gen.sv \
-    src/sim/testbench/video/pattern_gen_tb.sv
+run_test "CPU PROGRAM" cpu_tb cpu_sim cpu.vcd \
+    -f filelist.f \
+    src/sim/testbench/soc/cpu_tb.sv
 
 run_test "SYSTEM BOOT PROGRAM" system_tb system_sim system.vcd \
     -f filelist.f \
-    src/sim/rpll_sim.v \
-    src/sim/hdmi_prim_sim.v \
     src/sim/testbench/soc/system_tb.sv
 
 echo "========== ALL TESTS PASSED =========="
