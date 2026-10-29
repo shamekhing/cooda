@@ -6,8 +6,9 @@
 #   ./run.sh --no-gui     run the regression without GTKWave
 #   ./run.sh --help       show usage
 #
-# The regression runs package invariants, the ALU differential test, the
-# program-level CPU test, and the system boot smoke test under Icarus.
+# The regression runs package, ALU, CPU, system boot, and DDR3 interface
+# tests under Icarus. The DDR3 PHY itself uses Gowin primitives and is
+# not simulated by this script.
 #
 # Compile order lives in filelist.f. The Gowin project's FileList mirrors
 # it - keep the two in step.
@@ -21,7 +22,7 @@ for arg in "$@"; do
             ;;
         --help|-h)
             echo "usage: $0 [--no-gui]"
-            echo "  runs the package invariants, ALU, CPU and boot tests."
+            echo "  runs package, ALU, CPU, system, and DDR3 interface tests."
             exit 0
             ;;
         *)
@@ -71,6 +72,18 @@ run_test "CPU PROGRAM" cpu_tb cpu_sim cpu.vcd \
 run_test "SYSTEM BOOT PROGRAM" system_tb system_sim system.vcd \
     -f filelist.f \
     src/sim/testbench/soc/system_tb.sv
+
+run_test "DDR3 CDC" ddr3_cdc_tb ddr3_cdc_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/ddr3_cdc_tb.sv
+
+run_test "DDR3 TARGET" ddr3_target_tb ddr3_target_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/ddr3_target_tb.sv
+
+run_test "MEMORY MAP" memory_map_tb memory_map_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/memory_map_tb.sv
 
 echo "========== ALL TESTS PASSED =========="
 

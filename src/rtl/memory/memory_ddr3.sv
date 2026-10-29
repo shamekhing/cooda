@@ -6,8 +6,8 @@
 // of ddr3_controller (pclk domain) and ddr3_cdc:
 //
 //   - 32-bit, byte-addressed, word-aligned bus
-//   - rsp.ready is a one-cycle pulse, so the master must drop
-//     req.valid once it completes
+//   - target_rsp.ready is a one-cycle pulse, so the master must drop
+//     target_req.valid once it completes
 //   - one outstanding transaction, no pipelining
 //   - an error instead of a hang when the controller is not
 //     calibrated yet, the address is outside the DDR3 window, the
@@ -46,8 +46,8 @@ module memory_ddr3 #(
     // ---------------- SoC domain ----------------
     input  logic        clk,
     input  logic        rst,
-    input  soc_pkg::bus_req_s req,
-    output soc_pkg::bus_rsp_s rsp,
+    input  soc_pkg::bus_req_s target_req,
+    output soc_pkg::bus_rsp_s target_rsp,
 
     // ---------------- DDR3 controller domain ----------------
     input  logic        clk_ddr,
@@ -102,21 +102,31 @@ module memory_ddr3 #(
 
     logic addr_ok, align_ok, strobe_ok, local_err;
 
-    assign addr_ok   = (req.addr < DDR3_BYTES);
-    assign align_ok  = soc_pkg::bus_is_aligned(req.addr);
-    assign strobe_ok = (req.op == soc_pkg::BusRead) ||
-                       (req.wstrb == soc_pkg::BUS_STRB_ALL);
+    assign addr_ok   = (target_req.addr < DDR3_BYTES);
+    assign align_ok  = soc_pkg::bus_is_aligned(target_req.addr);
+    assign strobe_ok = (target_req.op == soc_pkg::BusRead) ||
+                       (target_req.wstrb == soc_pkg::BUS_STRB_ALL);
 
     assign local_err = !ctl_ready_s2 || !addr_ok || !align_ok || !strobe_ok;
 
     // CDC request: held up for the whole transaction.
     logic        cdc_req;
     logic [25:0] cdc_addr;
+    logic        cdc_wr;
+    logic [31:0] cdc_wdata;
     logic [31:0] cdc_rdata;
     logic        cdc_ack, cdc_err;
 
+    // The upstream master may withdraw or change its request as soon
+    // as this target accepts it. Hold the accepted payload until done.
+    logic [25:0] req_addr_q;
+    logic        req_wr_q;
+    logic [31:0] req_wdata_q;
+
     assign cdc_req  = (bus_q == StBusy);
-    assign cdc_addr = req.addr[26:1];
+    assign cdc_addr = req_addr_q;
+    assign cdc_wr   = req_wr_q;
+    assign cdc_wdata= req_wdata_q;
 
     always_comb begin
         bus_d = bus_q;
@@ -125,7 +135,7 @@ module memory_ddr3 #(
             // Refuse locally (no transaction reaches the DRAM) or
             // start one.
             StIdle: begin
-                if (req.valid) begin
+                if (target_req.valid) begin
                     if (local_err) bus_d = StDone;
                     else           bus_d = StBusy;
                 end
@@ -136,7 +146,7 @@ module memory_ddr3 #(
                 if (cdc_ack) bus_d = StDone;
             end
 
-            // One cycle with rsp.ready high.
+            // One cycle with target_rsp.ready high.
             StDone: bus_d = StIdle;
 
             default: bus_d = StIdle;
@@ -146,23 +156,32 @@ module memory_ddr3 #(
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             bus_q     <= StIdle;
-            rsp.ready <= 1'b0;
-            rsp.rdata <= '0;
-            rsp.error <= 1'b0;
+            req_addr_q <= '0;
+            req_wr_q   <= 1'b0;
+            req_wdata_q<= '0;
+            target_rsp.ready <= 1'b0;
+            target_rsp.rdata <= '0;
+            target_rsp.error <= 1'b0;
         end else begin
             bus_q     <= bus_d;
-            rsp.ready <= 1'b0;
+            target_rsp.ready <= 1'b0;
 
-            if (bus_q == StIdle && req.valid && local_err) begin
-                rsp.ready <= 1'b1;
-                rsp.rdata <= '0;
-                rsp.error <= 1'b1;
+            if (bus_q == StIdle && target_req.valid && !local_err) begin
+                req_addr_q  <= target_req.addr[26:1];
+                req_wr_q    <= (target_req.op == soc_pkg::BusWrite);
+                req_wdata_q <= target_req.wdata;
+            end
+
+            if (bus_q == StIdle && target_req.valid && local_err) begin
+                target_rsp.ready <= 1'b1;
+                target_rsp.rdata <= '0;
+                target_rsp.error <= 1'b1;
             end
 
             if (bus_q == StBusy && cdc_ack) begin
-                rsp.ready <= 1'b1;
-                rsp.rdata <= cdc_rdata;
-                rsp.error <= cdc_err;
+                target_rsp.ready <= 1'b1;
+                target_rsp.rdata <= cdc_rdata;
+                target_rsp.error <= cdc_err;
             end
         end
     end
@@ -184,8 +203,8 @@ module memory_ddr3 #(
         .rst_s     (rst),
         .req       (cdc_req),
         .addr      (cdc_addr),
-        .wr        (req.op == soc_pkg::BusWrite),
-        .wdata     (req.wdata),
+        .wr        (cdc_wr),
+        .wdata     (cdc_wdata),
         .ack       (cdc_ack),
         .rdata     (cdc_rdata),
         .err       (cdc_err),

@@ -38,8 +38,8 @@ module ddr3_target_tb;
     logic rst_ddr = 1'b1;
 
     // ---------------- bus ----------------
-    soc_pkg::bus_req_s req;
-    soc_pkg::bus_rsp_s rsp;
+    soc_pkg::bus_req_s target_req;
+    soc_pkg::bus_rsp_s target_rsp;
 
     // ---------------- controller side ----------------
     logic        ctl_rd, ctl_wr, ctl_refresh;
@@ -61,8 +61,8 @@ module ddr3_target_tb;
     ) dut (
         .clk       (clk),
         .rst       (rst),
-        .req       (req),
-        .rsp       (rsp),
+        .target_req(target_req),
+        .target_rsp(target_rsp),
 
         .clk_ddr   (clk_ddr),
         .rst_ddr   (rst_ddr),
@@ -149,18 +149,18 @@ module ddr3_target_tb;
                               output logic [31:0] rd_out,
                               output logic        err_out);
         @(negedge clk);
-        req.valid = 1'b1;
-        req.op    = wr_v ? soc_pkg::BusWrite : soc_pkg::BusRead;
-        req.addr  = a;
-        req.wdata = wd;
-        req.wstrb = strb;
+        target_req.valid = 1'b1;
+        target_req.op    = wr_v ? soc_pkg::BusWrite : soc_pkg::BusRead;
+        target_req.addr  = a;
+        target_req.wdata = wd;
+        target_req.wstrb = strb;
 
-        while (!rsp.ready) @(negedge clk);
-        rd_out  = rsp.rdata;
-        err_out = rsp.error;
+        while (!target_rsp.ready) @(negedge clk);
+        rd_out  = target_rsp.rdata;
+        err_out = target_rsp.error;
 
         @(negedge clk);
-        req.valid = 1'b0;
+        target_req.valid = 1'b0;
         checks++;
     endtask
 
@@ -189,6 +189,29 @@ module ddr3_target_tb;
         end
     endtask
 
+    // Change the master's payload after the target has accepted it.
+    // The transaction must still use the fields captured at acceptance.
+    task automatic write_then_change_payload(input logic [31:0] a,
+                                              input logic [31:0] wd);
+        @(negedge clk);
+        target_req.valid = 1'b1;
+        target_req.op    = soc_pkg::BusWrite;
+        target_req.addr  = a;
+        target_req.wdata = wd;
+        target_req.wstrb = soc_pkg::BUS_STRB_ALL;
+
+        // One bus edge accepts the request and latches its payload.
+        @(negedge clk);
+        target_req.addr  = a + 32'd4;
+        target_req.wdata = ~wd;
+        while (!target_rsp.ready) @(negedge clk);
+        err_v = target_rsp.error;
+
+        @(negedge clk);
+        target_req.valid = 1'b0;
+        checks++;
+    endtask
+
 
 
     // ========================================================
@@ -198,7 +221,7 @@ module ddr3_target_tb;
     int cmds_before;
 
     initial begin
-        req = '0;
+        target_req = '0;
         stall = 1'b0;
         ctl_ready = 1'b0;
         n_rd = 0; n_wr = 0; n_ref = 0;
@@ -238,6 +261,18 @@ module ddr3_target_tb;
         end
         expect_read(32'h0000_0010, 32'hAABB_CCDD, "read back");
 
+        // The bus payload is captured when accepted, even if the
+        // requester changes it before the CDC completes.
+        write_then_change_payload(32'h0000_0030, 32'h5566_7788);
+        if (err_v !== 1'b0 || fake_mem[24] !== 16'h7788 ||
+            fake_mem[25] !== 16'h5566 || fake_mem[26] !== 16'h0000 ||
+            fake_mem[27] !== 16'h0000) begin
+            errors++;
+            $display("FAIL payload capture: err=%b mem[24:27]=%h %h %h %h",
+                     err_v, fake_mem[24], fake_mem[25],
+                     fake_mem[26], fake_mem[27]);
+        end
+
         // A second word, to be sure addressing advances.
         bus_access(32'h0000_0020, 1'b1, 32'h1122_3344, BUS_STRB_ALL, rd_v, err_v);
         expect_read(32'h0000_0020, 32'h1122_3344, "read back 2");
@@ -250,10 +285,23 @@ module ddr3_target_tb;
         expect_error(32'h0800_0000, 1'b0, 32'h0, BUS_STRB_NONE, "out-of-range read");
         expect_error(32'hFFFF_FFFC, 1'b1, 32'h1, BUS_STRB_ALL, "way out of range");
         expect_error(32'h0000_0040, 1'b1, 32'h1, 4'b0001, "partial strobe");
+        expect_error(32'h0800_0000, 1'b0, 32'h0, BUS_STRB_NONE,
+                    "first address beyond DDR window");
         repeat (5) @(negedge clk);
         if ((n_rd + n_wr) !== cmds_before) begin
             errors++;
             $display("FAIL: refused access reached the controller");
+        end
+
+        // The last aligned word is wholly inside the 128 MiB window;
+        // the next byte address is outside it.
+        bus_access(32'h07FF_FFFC, 1'b1, 32'h89AB_CDEF,
+                   BUS_STRB_ALL, rd_v, err_v);
+        if (err_v !== 1'b0 || fake_mem[1022] !== 16'hCDEF ||
+            fake_mem[1023] !== 16'h89AB) begin
+            errors++;
+            $display("FAIL last DDR word: err=%b low=%h high=%h",
+                     err_v, fake_mem[1022], fake_mem[1023]);
         end
 
         // 4. Refresh: with a 64-cycle period, a burst of accesses
@@ -288,7 +336,7 @@ module ddr3_target_tb;
             $display("PASS: ddr3_target %0d checks (%0d rd, %0d wr, %0d ref)",
                      checks, n_rd, n_wr, n_ref);
         else
-            $display("FAIL: ddr3_target %0d checks, %0d errors", checks, errors);
+            $fatal(1, "FAIL: ddr3_target %0d checks, %0d errors", checks, errors);
         $finish;
     end
 

@@ -263,7 +263,7 @@ module ddr3_cdc_tb;
             $display("PASS: ddr3_cdc %0d checks, %0d transactions, %0d acks",
                      checks, reqs, acks_before_reset);
         else
-            $display("FAIL: ddr3_cdc %0d checks, %0d errors", checks, errors);
+            $fatal(1, "FAIL: ddr3_cdc %0d checks, %0d errors", checks, errors);
         $finish;
     end
 
