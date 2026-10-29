@@ -6,9 +6,11 @@
 #   ./run.sh --no-gui     run the regression without GTKWave
 #   ./run.sh --help       show usage
 #
-# The regression runs package, ALU, CPU, system boot, and DDR3 interface
-# tests under Icarus. The DDR3 PHY itself uses Gowin primitives and is
-# not simulated by this script.
+# The regression runs package, ALU, CPU, system boot, DDR3 interface, and
+# (when local vendor models are installed) DDR3 controller tests under Icarus.
+# The controller test is much slower than the rest - minutes rather than
+# seconds - because the Micron and Gowin primitive models make every DRAM
+# access expensive. See src/sim/vendor/README.md.
 #
 # Compile order lives in filelist.f. The Gowin project's FileList mirrors
 # it - keep the two in step.
@@ -84,6 +86,17 @@ run_test "DDR3 TARGET" ddr3_target_tb ddr3_target_sim "" \
 run_test "MEMORY MAP" memory_map_tb memory_map_sim "" \
     -f filelist.f \
     src/sim/testbench/memory/memory_map_tb.sv
+
+if [[ -f src/sim/vendor/ddr3/ddr3.v && -f src/sim/vendor/prim_sim.v ]]; then
+    run_test "DDR3 CONTROLLER + MICRON MODEL" ddr3_controller_tb ddr3_controller_sim "" \
+        -D SIM -D den1024Mb -D sg25 -D x16 -I src/sim/vendor \
+        -f filelist.f \
+        src/sim/testbench/memory/ddr3_controller_tb.sv \
+        src/sim/vendor/ddr3/ddr3.v \
+        src/sim/vendor/prim_sim.v
+else
+    echo "========== DDR3 CONTROLLER + MICRON MODEL: SKIPPED (install local models; see src/sim/vendor/README.md) =========="
+fi
 
 echo "========== ALL TESTS PASSED =========="
 
