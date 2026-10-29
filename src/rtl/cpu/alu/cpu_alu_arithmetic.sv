@@ -164,11 +164,19 @@ module cpu_alu_arithmetic (
                              : operand_a;
                     b_sr_d = operand_b;
 
-                    // Initial carry: -x sets it, subtraction borrows, the
-                    // carry-in variants take the flag, everything else 0.
+                    // Initial carry into bit 0 of the serial adder.
+                    //
+                    // The adder computes  x + y + carry  with
+                    //   add   : x = a,  y = b
+                    //   sub   : x = a,  y = ~b   (a - b      = a + ~b + 1)
+                    //   sbc   : x = a,  y = ~b   (a - b - cin = a + ~b + ~cin)
+                    //   neg   : x = 0,  y = ~a   (-a         = ~a + 1)
+                    // so the borrow variants must inject the complement of
+                    // carry_in; injecting carry_in itself would compute
+                    // a - b - 1 + cin instead of a - b - cin.
                     carry_bit_d = is_neg ? 1'b1 :
                                   is_abs ? operand_a[arch_pkg::WORD_WIDTH-1] :
-                                  is_sbc ? carry_in :
+                                  is_sbc ? ~carry_in :
                                   is_sub ? 1'b1 :
                                   is_adc ? carry_in : 1'b0;
 

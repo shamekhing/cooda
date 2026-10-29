@@ -14,15 +14,17 @@
 // Instruction format (struct below is the single source of
 // truth; MSB first):
 //
-//     [26]     update_status
-//     [25]     immediate_mode
-//     [24:19]  opcode
-//     [18:13]  rd
-//     [12:7]   rs1
-//     [6:1]    rs2
+//     [31:26]  reserved, must be zero
+//     [25]     update_status
+//     [24]     immediate_mode
+//     [23:18]  opcode
+//     [17:12]  rd
+//     [11:6]   rs1
+//     [5:0]    rs2
 //
 // Note: The instruction struct is 26 bits wide. When cast to
-// a wider word_t, it is zero-extended.
+// a wider word_t, it is zero-extended, and cpu_decoder rejects any
+// encoding whose reserved bits are not zero.
 //
 // Immediates are OpNot packed. An instruction that needs one is
 // followed by one complete word holding it (see isa_has_imm).
@@ -269,8 +271,8 @@ package isa_pkg;
         logic      register_write_enable;
         logic      flags_write_enable;
 
-        logic      memory_re;
-        logic      memory_we;
+        logic      memory_read_enable;
+        logic      memory_write_enable;
 
         logic      decode_valid;
     } program_ctrl_s;

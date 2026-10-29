@@ -1,8 +1,8 @@
 // ============================================================
-// cpu  instruction unit + execution core on two RPU masters
+// cpu  instruction unit + execution core with internal fetch/data ports
 //
-//   instr_* : instruction bus (RPU master cpu_i), read-only
-//   data_*  : data / MMIO bus (RPU master cpu_d)
+//   instr_* : instruction fetch request
+//   data_*  : data / MMIO request
 //
 // cpu_program owns the program counter, the fetch state machine, the
 // decoder and branch resolution. It hands the execution core one
@@ -23,11 +23,11 @@ module cpu (
     input  logic rst,
     input  logic run,
 
-    output soc_pkg::bus_req_s instr_req,
     input  soc_pkg::bus_rsp_s instr_rsp,
+    output soc_pkg::bus_req_s instr_req,
 
-    output soc_pkg::bus_req_s data_req,
     input  soc_pkg::bus_rsp_s data_rsp,
+    output soc_pkg::bus_req_s data_req,
 
     output logic retire_valid,
     output logic illegal_instr,
@@ -51,7 +51,7 @@ module cpu (
     logic            data_fault_q, data_fault_d;
 
     // ========================================================
-    // DATA-BUS FAULT LATCH (cpu_d master)
+    // DATA-BUS FAULT LATCH
     // ========================================================
 
     assign fault = program_fault | data_fault_q;
@@ -118,8 +118,8 @@ module cpu (
         .carry_in     (carry_flag),
         .carry_flag   (carry_flag),
 
-        .data_req     (data_req),
-        .data_rsp     (data_rsp),
+        .cpu_req      (data_req),
+        .cpu_rsp      (data_rsp),
 
         .operand_a    (operand_a),
         .operand_b    (operand_b),

@@ -8,8 +8,8 @@
 //
 // LOAD/STORE completion:
 //
-//   - data_req.valid is asserted for every LOAD/STORE request.
-//   - data_req.op distinguishes STORE from LOAD.
+//   - cpu_req.valid is asserted for every LOAD/STORE request.
+//   - cpu_req.op distinguishes STORE from LOAD.
 //   - address/write data remain stable while the instruction is held.
 //   - a bus handshake captures read data.
 //   - LOAD/STORE retire and write back on the following cycle.
@@ -39,10 +39,10 @@ module cpu_core (
     input  logic carry_in,
 
     // --------------------------------------------------------
-    // Data-bus master (RPU cpu_d).
+    // Data-bus client.
     // --------------------------------------------------------
-    output soc_pkg::bus_req_s data_req,
-    input  soc_pkg::bus_rsp_s data_rsp,
+    output soc_pkg::bus_req_s cpu_req,
+    input  soc_pkg::bus_rsp_s cpu_rsp,
 
     // --------------------------------------------------------
     // Operand values handed to cpu_branch.
@@ -75,7 +75,7 @@ module cpu_core (
     // these two controls mutually exclusive for every legal
     // instruction.
     logic memory_op;
-    assign memory_op = ctrl.memory_re || ctrl.memory_we;
+    assign memory_op = ctrl.memory_read_enable|| ctrl.memory_write_enable;
 
     arch_pkg::word_t store_data;
     arch_pkg::word_t alu_result;
@@ -94,29 +94,29 @@ module cpu_core (
     // DATA BUS REQUEST
     // ========================================================
     // core_enable remains asserted while cpu_program stalls cpu_pc,
-    // therefore data_req and all request payload signals remain
-    // asserted and stable until data_rsp.ready completes the
+    // therefore cpu_req and all request payload signals remain
+    // asserted and stable until cpu_rsp.ready completes the
     // transaction. The request only starts once the ALU has produced
     // the effective address.
     // --------------------------------------------------------
 
-    assign data_req.valid =
+    assign cpu_req.valid =
         (state_q == StWait) &&
         core_enable &&
         ctrl.decode_valid &&
         memory_op &&
         !rst;
 
-    assign mem_accept = data_req.valid && data_rsp.ready;
+    assign mem_accept = cpu_req.valid && cpu_rsp.ready;
 
-    assign data_req.op = ctrl.memory_we ? soc_pkg::BusWrite
+    assign cpu_req.op = ctrl.memory_write_enable? soc_pkg::BusWrite
                                         : soc_pkg::BusRead;
 
     // LOAD/STORE decode to ALU OpAdd, so alu_result is the effective
     // byte address.
-    assign data_req.addr  = alu_result;
-    assign data_req.wdata = store_data;
-    assign data_req.wstrb = soc_pkg::BUS_STRB_ALL;
+    assign cpu_req.addr  = alu_result;
+    assign cpu_req.wdata = store_data;
+    assign cpu_req.wstrb = soc_pkg::BUS_STRB_ALL;
 
     // ========================================================
     // ARCHITECTURAL WRITE ENABLES
@@ -186,7 +186,7 @@ module cpu_core (
 
             StWait: begin
                 if (mem_accept) begin
-                    mem_rdata_d = data_rsp.rdata;
+                    mem_rdata_d = cpu_rsp.rdata;
                     state_d     = StRetire;
                 end else if (!core_enable) begin
                     state_d = StIdle;
@@ -245,7 +245,7 @@ module cpu_core (
         .flags_write_enable(effective_flags_write),
 
         .dmem_rdata(mem_rdata_q),
-        .writeback_from_mem(ctrl.memory_re),
+        .writeback_from_mem(ctrl.memory_read_enable),
 
         .operand_a(operand_a),
         .operand_b(operand_b),

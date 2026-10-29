@@ -1,191 +1,135 @@
 // ============================================================
-// system  CPU + RPU + memory
-//
-//   cpu (instr) --+
-//   cpu (data)  --+--> RPU --+--> ROM
-//   gpu  (idle) --+          +--> DATA RAM
-//   tpu  (idle) --+          +--> GPU MMIO (stub: bus error)
-//                            +--> DDR3 --> memory_ddr3_phy
-//
-// The CPU never touches memory directly; every access goes
-// through the RPU. GPU/TPU masters are tied idle and the GPU MMIO
-// slave answers with a bus error until those blocks are linked:
-// replace the tie-offs below with the real modules.
-//
-// The DDR3 pins pass straight through to the top level.
+// system  CPU + shared bus arbitration + BSRAM and DDR3
 // ============================================================
-
 module system #(
-    // Video raster this SoC renders into (800x480 for the RGB LCD).
-    parameter int H_RES = 800,
-    parameter int V_RES = 480,
-
-    // Boot ROM contents, relative to the project root (where cooda.gprj
-    // lives). That is both the directory the simulation runs from and the
-    // directory GowinSynthesis resolves $readmemh against - verified with
-    // a Gowin build, which reported EX3988 for a ../ path.
-    parameter     ROM_INIT_FILE = "src/programs/boot_program.hex"
+    parameter INIT_FILE = "src/programs/boot_program.hex",
+    parameter bit DDR3_ENABLE = 1'b0
 ) (
     input  logic clk,
     input  logic rst,
     input  logic run,
 
+    // DDR3 clocks/reset come from the board wrapper.
+    input  logic ddr_pclk,
+    input  logic ddr_fclk,
+    input  logic ddr_ck,
+    input  logic ddr_rst,
+    inout  wire [15:0] DDR3_DQ,
+    inout  wire [1:0]  DDR3_DQS,
+    output wire [12:0] DDR3_A,
+    output wire [2:0]  DDR3_BA,
+    output wire        DDR3_nRAS,
+    output wire        DDR3_nCAS,
+    output wire        DDR3_nWE,
+    output wire        DDR3_CK,
+    output wire        DDR3_CKE,
+    output wire        DDR3_nRESET,
+    output wire [1:0]  DDR3_DM,
+    output wire        DDR3_ODT,
+
     output logic retire_valid,
     output logic illegal_instr,
     output logic cpu_fault,
 
-    // Video side: raster timing in, pixels out (pix_clk domain).
-    input  logic        pix_clk,
-    input  logic        pix_rst,
-    input  logic        pix_de,
-    input  logic [11:0] pix_x,
-    input  logic [11:0] pix_y,
-    output logic [7:0]  pix_r,
-    output logic [7:0]  pix_g,
-    output logic [7:0]  pix_b,
-
-    // DDR3 pins
-    output logic [13:0]  ddr3_addr,
-    output logic [2:0]   ddr3_bank,
-    output logic         ddr3_ras,
-    output logic         ddr3_cas,
-    output logic         ddr3_we,
-    output logic         ddr3_ck_p,
-    output logic         ddr3_ck_n,
-    output logic         ddr3_cke,
-    output logic         ddr3_odt,
-    output logic         ddr3_rst_n,
-    output logic         ddr3_cs,
-    output logic [1:0]   ddr3_dm,
-    inout  wire  [15:0]  ddr3_dq,
-    inout  wire  [1:0]   ddr3_dqs_p,
-    inout  wire  [1:0]   ddr3_dqs_n
+    // DDR3 bring-up status for the board LEDs. All three are low when
+    // DDR3_ENABLE is 0.
+    output logic ddr_write_level_done,
+    output logic ddr_read_calib_done,
+    output logic ddr_err
 );
+    soc_pkg::bus_req_s instr_req, data_req;
+    soc_pkg::bus_rsp_s instr_rsp, data_rsp;
+    soc_pkg::bus_req_s gpu_req, tpu_req;
+    soc_pkg::bus_rsp_s gpu_rsp, tpu_rsp;
+    soc_pkg::bus_req_s target_req;
+    soc_pkg::bus_rsp_s target_rsp;
+    soc_pkg::bus_req_s ddr_req;
+    wire soc_pkg::bus_rsp_s ddr_rsp;
+    soc_pkg::bus_rsp_s ddr_target_rsp;
 
-    // ========================================================
-    // BUSES
-    // ========================================================
-
-    soc_pkg::bus_req_s p_req, cpu_req, gpu_req, tpu_req;
-    soc_pkg::bus_rsp_s p_rsp, cpu_rsp, gpu_rsp, tpu_rsp;
-
-    soc_pkg::bus_req_s rom_req, ram_req, gpu_mmio_req, ddr3_req;
-    soc_pkg::bus_rsp_s rom_rsp, ram_rsp, gpu_mmio_rsp, ddr3_rsp;
-
-    logic [3:0] mon_m, mon_s;
-
-    // ========================================================
-    // TIE-OFFS (until GPU / TPU masters are linked)
-    // ========================================================
+    logic ctl_rd, ctl_wr, ctl_refresh;
+    logic [25:0] ctl_addr;
+    logic [15:0] ctl_din, ctl_dout;
+    logic ctl_busy, ctl_data_ready;
+    logic write_level_done, read_calib_done;
+    logic [7:0] wstep;
+    logic [1:0] rclkpos;
+    logic [2:0] rclksel;
+    logic [63:0] ddr_debug;
 
     assign gpu_req = '0;
     assign tpu_req = '0;
 
-    // ========================================================
-    // CPU
-    // ========================================================
-
     cpu u_cpu (
-        .clk           (clk),
-        .rst           (rst),
-        .run           (run),
-
-        .instr_req     (p_req),
-        .instr_rsp     (p_rsp),
-        .data_req      (cpu_req),
-        .data_rsp      (cpu_rsp),
-
-        .retire_valid  (retire_valid),
-        .illegal_instr (illegal_instr),
-        .fault         (cpu_fault)
+        .clk(clk), .rst(rst), .run(run),
+        .instr_req(instr_req), .instr_rsp(instr_rsp),
+        .data_req(data_req), .data_rsp(data_rsp),
+        .retire_valid(retire_valid),
+        .illegal_instr(illegal_instr), .fault(cpu_fault)
     );
 
-    // ========================================================
-    // RPU
-    // ========================================================
-
-    rpu u_rpu (
-        .clk          (clk),
-        .rst          (rst),
-
-        .p_req    (p_req),
-        .p_rsp    (p_rsp),
-        .cpu_req    (cpu_req),
-        .cpu_rsp    (cpu_rsp),
-        .gpu_req      (gpu_req),
-        .gpu_rsp      (gpu_rsp),
-        .tpu_req      (tpu_req),
-        .tpu_rsp      (tpu_rsp),
-
-        .rom_req      (rom_req),
-        .rom_rsp      (rom_rsp),
-        .ram_req      (ram_req),
-        .ram_rsp      (ram_rsp),
-        .gpu_mmio_req (gpu_mmio_req),
-        .gpu_mmio_rsp (gpu_mmio_rsp),
-        .ddr3_req     (ddr3_req),
-        .ddr3_rsp     (ddr3_rsp),
-
-        .mon_m        (mon_m),
-        .mon_s        (mon_s)
+    // BSRAM remains the initialized, low-latency boot memory. The
+    // DDR3 window is decoded above it at 0x0800_0000..0x0fff_ffff.
+    // Both targets share the CPU bus grant, so only one target sees a
+    // request at a time.
+    bus_arbiter u_memory_arbiter (
+        .clk(clk), .rst(rst),
+        .req0(instr_req), .rsp0(instr_rsp),
+        .req1(data_req), .rsp1(data_rsp),
+        .req2(gpu_req), .rsp2(gpu_rsp),
+        .req3(tpu_req), .rsp3(tpu_rsp),
+        .target_req(target_req), .target_rsp(target_rsp)
     );
 
-    // ========================================================
-    // GPU (GPU_MMIO slave + bus activity visualiser)
-    // ========================================================
-
-    gpu #(.H_RES(H_RES), .V_RES(V_RES)) u_gpu (
-        .clk          (clk),
-        .rst          (rst),
-
-        .pix_clk      (pix_clk),
-        .pix_rst      (pix_rst),
-
-        .req          (gpu_mmio_req),
-        .rsp          (gpu_mmio_rsp),
-
-        .mon_m        (mon_m),
-        .mon_s        (mon_s),
-
-        .de           (pix_de),
-        .x            (pix_x),
-        .y            (pix_y),
-
-        .r            (pix_r),
-        .g            (pix_g),
-        .b            (pix_b)
+    memory #(.INIT_FILE(INIT_FILE)) u_memory (
+        .clk(clk), .rst(rst), .target_req(target_req),
+        .target_rsp(target_rsp),
+        .ddr_req(ddr_req), .ddr_rsp(ddr_rsp)
     );
 
-    // ========================================================
-    // MEMORY
-    // ========================================================
+    generate
+        if (DDR3_ENABLE) begin : gen_ddr3
+            memory_ddr3 u_ddr3_memory (
+                .clk(clk), .rst(rst), .target_req(ddr_req),
+                .target_rsp(ddr_target_rsp),
+                .clk_ddr(ddr_pclk), .rst_ddr(ddr_rst),
+                .ctl_rd(ctl_rd), .ctl_wr(ctl_wr), .ctl_refresh(ctl_refresh),
+                .ctl_addr(ctl_addr), .ctl_din(ctl_din), .ctl_dout(ctl_dout),
+                .ctl_busy(ctl_busy), .ctl_data_ready(ctl_data_ready),
+                .ctl_ready(write_level_done && read_calib_done),
+                .err_sticky(ddr_err)
+            );
 
-    memory #(.ROM_INIT_FILE(ROM_INIT_FILE)) u_memory (
-        .clk          (clk),
-        .rst          (rst),
+            ddr3_controller u_ddr3_controller (
+                .DDR3_DQ(DDR3_DQ), .DDR3_DQS(DDR3_DQS),
+                .DDR3_A(DDR3_A), .DDR3_BA(DDR3_BA),
+                .DDR3_nRAS(DDR3_nRAS), .DDR3_nCAS(DDR3_nCAS),
+                .DDR3_nWE(DDR3_nWE), .DDR3_nCS(), .DDR3_CK(DDR3_CK),
+                .DDR3_CKE(DDR3_CKE), .DDR3_nRESET(DDR3_nRESET),
+                .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT),
+                .pclk(ddr_pclk), .fclk(ddr_fclk), .ck(ddr_ck),
+                .resetn(!ddr_rst), .rd(ctl_rd), .wr(ctl_wr),
+                .refresh(ctl_refresh), .addr(ctl_addr), .din(ctl_din),
+                .dout(ctl_dout), .dout128(), .data_ready(ctl_data_ready),
+                .busy(ctl_busy), .write_level_done(write_level_done),
+                .wstep(wstep), .read_calib_done(read_calib_done),
+                .rclkpos(rclkpos), .rclksel(rclksel), .debug(ddr_debug)
+            );
+        end else begin : gen_no_ddr3
+            assign ddr_rsp = {ddr_req.valid, arch_pkg::word_t'(0), ddr_req.valid};
+            assign {DDR3_A, DDR3_BA, DDR3_nRAS, DDR3_nCAS, DDR3_nWE,
+                    DDR3_CK, DDR3_CKE, DDR3_nRESET, DDR3_DM, DDR3_ODT} = '0;
+            assign DDR3_DQ  = 'z;
+            assign DDR3_DQS = 'z;
+            assign write_level_done = 1'b0;
+            assign read_calib_done  = 1'b0;
+            assign ddr_err          = 1'b0;
+        end
+        if (DDR3_ENABLE) begin : gen_ddr3_response
+            assign ddr_rsp = ddr_target_rsp;
+        end
+    endgenerate
 
-        .rom_req      (rom_req),
-        .rom_rsp      (rom_rsp),
-        .ram_req      (ram_req),
-        .ram_rsp      (ram_rsp),
-        .ddr3_req     (ddr3_req),
-        .ddr3_rsp     (ddr3_rsp),
-
-        .ddr3_addr    (ddr3_addr),
-        .ddr3_bank    (ddr3_bank),
-        .ddr3_ras     (ddr3_ras),
-        .ddr3_cas     (ddr3_cas),
-        .ddr3_we      (ddr3_we),
-        .ddr3_ck_p    (ddr3_ck_p),
-        .ddr3_ck_n    (ddr3_ck_n),
-        .ddr3_cke     (ddr3_cke),
-        .ddr3_odt     (ddr3_odt),
-        .ddr3_rst_n   (ddr3_rst_n),
-        .ddr3_cs      (ddr3_cs),
-        .ddr3_dm      (ddr3_dm),
-        .ddr3_dq      (ddr3_dq),
-        .ddr3_dqs_p   (ddr3_dqs_p),
-        .ddr3_dqs_n   (ddr3_dqs_n)
-    );
-
+    assign ddr_write_level_done = write_level_done;
+    assign ddr_read_calib_done  = read_calib_done;
 endmodule

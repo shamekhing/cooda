@@ -6,8 +6,11 @@
 #   ./run.sh --no-gui     run the regression without GTKWave
 #   ./run.sh --help       show usage
 #
-# The regression runs package invariants, video unit testbenches, and a
-# system boot smoke test under Icarus.
+# The regression runs package, ALU, CPU, system boot, DDR3 interface, and
+# (when local vendor models are installed) DDR3 controller tests under Icarus.
+# The controller test is much slower than the rest - minutes rather than
+# seconds - because the Micron and Gowin primitive models make every DRAM
+# access expensive. See src/sim/vendor/README.md.
 #
 # Compile order lives in filelist.f. The Gowin project's FileList mirrors
 # it - keep the two in step.
@@ -21,7 +24,7 @@ for arg in "$@"; do
             ;;
         --help|-h)
             echo "usage: $0 [--no-gui]"
-            echo "  runs the package invariant checks."
+            echo "  runs package, ALU, CPU, system, and DDR3 interface tests."
             exit 0
             ;;
         *)
@@ -60,19 +63,40 @@ run_test "PACKAGE INVARIANTS" pkg_checks_tb pkg_checks_sim pkg_checks.vcd \
     src/sim/pkg_checks.sv \
     src/sim/testbench/soc/pkg_checks_tb.sv
 
-run_test "VIDEO TIMING" video_timing_tb video_timing_sim video_timing.vcd \
-    src/rtl/video/video_timing.sv \
-    src/sim/testbench/video/video_timing_tb.sv
+run_test "ALU DIFFERENTIAL" alu_tb alu_sim alu.vcd \
+    -f filelist.f \
+    src/sim/testbench/cpu/alu_tb.sv
 
-run_test "PATTERN GEN" pattern_gen_tb pattern_gen_sim pattern_gen.vcd \
-    src/rtl/video/pattern_gen.sv \
-    src/sim/testbench/video/pattern_gen_tb.sv
+run_test "CPU PROGRAM" cpu_tb cpu_sim cpu.vcd \
+    -f filelist.f \
+    src/sim/testbench/soc/cpu_tb.sv
 
 run_test "SYSTEM BOOT PROGRAM" system_tb system_sim system.vcd \
     -f filelist.f \
-    src/sim/rpll_sim.v \
-    src/sim/hdmi_prim_sim.v \
     src/sim/testbench/soc/system_tb.sv
+
+run_test "DDR3 CDC" ddr3_cdc_tb ddr3_cdc_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/ddr3_cdc_tb.sv
+
+run_test "DDR3 TARGET" ddr3_target_tb ddr3_target_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/ddr3_target_tb.sv
+
+run_test "MEMORY MAP" memory_map_tb memory_map_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/memory_map_tb.sv
+
+if [[ -f src/sim/vendor/ddr3/ddr3.v && -f src/sim/vendor/prim_sim.v ]]; then
+    run_test "DDR3 CONTROLLER + MICRON MODEL" ddr3_controller_tb ddr3_controller_sim "" \
+        -D SIM -D den1024Mb -D sg25 -D x16 -I src/sim/vendor \
+        -f filelist.f \
+        src/sim/testbench/memory/ddr3_controller_tb.sv \
+        src/sim/vendor/ddr3/ddr3.v \
+        src/sim/vendor/prim_sim.v
+else
+    echo "========== DDR3 CONTROLLER + MICRON MODEL: SKIPPED (install local models; see src/sim/vendor/README.md) =========="
+fi
 
 echo "========== ALL TESTS PASSED =========="
 

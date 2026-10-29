@@ -64,8 +64,8 @@ module cpu_datapath (
     arch_pkg::word_t store_data_q, store_data_d;
     arch_pkg::word_t writeback_data;
 
-    logic register_wen;
-    logic flags_wen;
+    logic register_write_gate;
+    logic flags_write_gate;
     logic alu_valid;
     logic alu_busy;
     arch_pkg::flags_s alu_flags;
@@ -79,10 +79,10 @@ module cpu_datapath (
     // instruction completes, so the multi-cycle ALU cannot disturb
     // the register file until its result is final. An unrecognised
     // encoding (alu_valid low) can never write.
-    assign register_wen =
+    assign register_write_gate =
         register_write_enable && alu_valid && !rst;
 
-    assign flags_wen =
+    assign flags_write_gate =
         flags_write_enable && alu_valid && !rst;
 
     // =========================================================
@@ -99,7 +99,7 @@ module cpu_datapath (
         .rs2_addr(rs2),
         .rs2_data(rs2_data),
 
-        .write_enable(register_wen),
+        .write_enable(register_write_gate),
         .write_addr(rd),
         .write_data(writeback_data)
     );
@@ -183,7 +183,7 @@ module cpu_datapath (
         .clk(clk),
         .rst(rst),
 
-        .flags_write_enable(flags_wen),
+        .flags_write_enable(flags_write_gate),
         .flags_in(alu_flags),
         .flags(flags_q)
     );
