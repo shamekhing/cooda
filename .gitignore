@@ -13,3 +13,4 @@
 examples/
 src/sim/build/
 src/sim/waveforms/
+data/mnist/
