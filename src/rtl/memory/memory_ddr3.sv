@@ -9,9 +9,13 @@
 //   - target_rsp.ready is a one-cycle pulse, so the master must drop
 //     target_req.valid once it completes
 //   - one outstanding transaction, no pipelining
-//   - an error instead of a hang when the controller is not
-//     calibrated yet, the address is outside the DDR3 window, the
-//     address is misaligned, or a write strobe is partial
+//   - while the controller has not calibrated yet the request is
+//     held (stalled), not failed: the DRAM is simply not available
+//     yet. If calibration never completes within CAL_WAIT_CYCLES
+//     the request is failed, so a dead DRAM faults visibly instead
+//     of hanging the SoC.
+//   - an error instead of a hang when the address is outside the
+//     DDR3 window, misaligned, or a write strobe is partial
 //
 // ADDRESSING
 //   The controller works in 16-bit halfword addresses and writes
@@ -46,7 +50,14 @@ module memory_ddr3 #(
     // inside the 7.8 us tREFI a 1 Gb DDR3 part requires (8192
     // refreshes per 64 ms). At 750 the DRAM sees ~8500 refreshes per
     // 64 ms, so there is margin for the issue latency too.
-    parameter int REFRESH_CYCLES = 750
+    parameter int REFRESH_CYCLES = 750,
+
+    // clk cycles to wait for the controller to finish calibration
+    // before failing the request. Power-up timers, ZQ calibration,
+    // write leveling and read calibration take about 1-1.5 ms, so
+    // 10 ms at 27 MHz only expires when the DRAM really is not
+    // coming up.
+    parameter int CAL_WAIT_CYCLES = 270_000
 ) (
     // ---------------- SoC domain ----------------
     input  logic        clk,
@@ -106,13 +117,32 @@ module memory_ddr3 #(
     bus_state_e bus_q, bus_d;
 
     logic addr_ok, align_ok, strobe_ok, local_err;
+    logic ctl_wait, cal_timeout;
+    logic [19:0] cal_wait_q, cal_wait_d;
 
     assign addr_ok   = (target_req.addr < DDR3_BYTES);
     assign align_ok  = soc_pkg::bus_is_aligned(target_req.addr);
     assign strobe_ok = (target_req.op == soc_pkg::BusRead) ||
                        (target_req.wstrb == soc_pkg::BUS_STRB_ALL);
 
-    assign local_err = !ctl_ready_s2 || !addr_ok || !align_ok || !strobe_ok;
+    // Not calibrated yet: hold the request rather than failing it.
+    assign ctl_wait = !ctl_ready_s2;
+
+    // ...but do not hold forever. A DRAM that never calibrates must
+    // produce an error, so the SoC faults instead of hanging.
+    assign cal_timeout = (cal_wait_q == CAL_WAIT_CYCLES[19:0]);
+
+    assign local_err = !addr_ok || !align_ok || !strobe_ok || cal_timeout;
+
+    // Count how long a request has been held waiting for calibration.
+    always_comb begin
+        cal_wait_d = cal_wait_q;
+        if (!ctl_wait) begin
+            cal_wait_d = 20'd0;
+        end else if (bus_q == StIdle && target_req.valid && !cal_timeout) begin
+            cal_wait_d = cal_wait_q + 20'd1;
+        end
+    end
 
     // CDC request: held up for the whole transaction.
     logic        cdc_req;
@@ -137,12 +167,13 @@ module memory_ddr3 #(
         bus_d = bus_q;
 
         case (bus_q)
-            // Refuse locally (no transaction reaches the DRAM) or
-            // start one.
+            // Refuse a contract violation, wait for calibration, or
+            // start the transaction.
             StIdle: begin
                 if (target_req.valid) begin
-                    if (local_err) bus_d = StDone;
-                    else           bus_d = StBusy;
+                    if (local_err)     bus_d = StDone;   // refuse
+                    else if (ctl_wait) bus_d = StIdle;   // hold
+                    else               bus_d = StBusy;
                 end
             end
 
@@ -164,11 +195,13 @@ module memory_ddr3 #(
             req_addr_q <= '0;
             req_wr_q   <= 1'b0;
             req_wdata_q<= '0;
+            cal_wait_q <= 20'd0;
             target_rsp.ready <= 1'b0;
             target_rsp.rdata <= '0;
             target_rsp.error <= 1'b0;
         end else begin
             bus_q     <= bus_d;
+            cal_wait_q<= cal_wait_d;
             target_rsp.ready <= 1'b0;
 
             if (bus_q == StIdle && target_req.valid && !local_err) begin

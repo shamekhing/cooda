@@ -53,11 +53,14 @@ module ddr3_target_tb;
     int errors = 0;
     int checks = 0;
 
-    // Short refresh period so the scheduler is exercised.
-    localparam int REFRESH_CYCLES = 64;
+    // Short refresh period so the scheduler is exercised, and a short
+    // calibration wait so its timeout path is reachable in simulation.
+    localparam int REFRESH_CYCLES  = 64;
+    localparam int CAL_WAIT_CYCLES = 300;
 
     memory_ddr3 #(
-        .REFRESH_CYCLES (REFRESH_CYCLES)
+        .REFRESH_CYCLES (REFRESH_CYCLES),
+        .CAL_WAIT_CYCLES(CAL_WAIT_CYCLES)
     ) dut (
         .clk       (clk),
         .rst       (rst),
@@ -232,6 +235,7 @@ module ddr3_target_tb;
     // ========================================================
 
     int cmds_before;
+    int cal_waited;
 
     initial begin
         target_req = '0;
@@ -246,17 +250,73 @@ module ddr3_target_tb;
         rst_ddr = 1'b0;
         repeat (5) @(negedge clk);
 
-        // 1. Not calibrated: everything errors and nothing reaches
-        //    the controller. (Refreshes are expected and counted
-        //    separately.)
+        // 1a. Not calibrated: the request is held (no ready, nothing
+        //     reaches the controller) rather than failed, then
+        //     completes normally once calibration finishes.
         cmds_before = n_rd + n_wr;
-        expect_error(32'h0000_0000, 1'b0, 32'h0, BUS_STRB_NONE, "not-ready read");
-        expect_error(32'h0000_0004, 1'b1, 32'h1234_5678, BUS_STRB_ALL, "not-ready write");
-        repeat (5) @(negedge clk);
+        @(negedge clk);
+        target_req.valid = 1'b1;
+        target_req.op    = soc_pkg::BusWrite;
+        target_req.addr  = 32'h0000_0010;
+        target_req.wdata = 32'hAABB_CCDD;
+        target_req.wstrb = BUS_STRB_ALL;
+        repeat (100) @(negedge clk);        // well inside CAL_WAIT_CYCLES
+        checks++;
+        if (target_rsp.ready !== 1'b0) begin
+            errors++;
+            $display("FAIL pre-calibration: responded before calibration");
+        end
         if ((n_rd + n_wr) !== cmds_before) begin
             errors++;
-            $display("FAIL: command issued while not calibrated");
+            $display("FAIL pre-calibration: command reached the controller");
         end
+
+        ctl_ready = 1'b1;                   // calibration completes
+        while (!target_rsp.ready) @(negedge clk);
+        checks++;
+        if (target_rsp.error !== 1'b0) begin
+            errors++;
+            $display("FAIL pre-calibration: error after calibration");
+        end
+        @(negedge clk);
+        target_req.valid = 1'b0;
+        if (fake_mem[8] !== 16'hCCDD || fake_mem[9] !== 16'hAABB) begin
+            errors++;
+            $display("FAIL pre-calibration: mem[8]=%04h mem[9]=%04h",
+                     fake_mem[8], fake_mem[9]);
+        end
+
+        // 1b. A controller that never calibrates must produce an
+        //     error rather than holding the bus forever.
+        ctl_ready = 1'b0;                   // DRAM never comes up
+        repeat (5) @(negedge clk);          // let the 2-FF sync settle
+        @(negedge clk);
+        target_req.valid = 1'b1;
+        target_req.op    = soc_pkg::BusRead;
+        target_req.addr  = 32'h0000_0020;
+        target_req.wstrb = BUS_STRB_NONE;
+        cal_waited = 0;
+        while (!target_rsp.ready && cal_waited < CAL_WAIT_CYCLES + 50) begin
+            @(negedge clk);
+            cal_waited++;
+        end
+        checks++;
+        if (target_rsp.ready !== 1'b1 || target_rsp.error !== 1'b1) begin
+            errors++;
+            $display("FAIL calibration timeout: ready=%b error=%b",
+                     target_rsp.ready, target_rsp.error);
+        end
+        // It must have stalled for about the full wait, not failed
+        // immediately.
+        if (cal_waited < CAL_WAIT_CYCLES - 2) begin
+            errors++;
+            $display("FAIL calibration timeout: failed after only %0d cycles",
+                     cal_waited);
+        end
+        @(negedge clk);
+        target_req.valid = 1'b0;
+        ctl_ready = 1'b1;                   // back to a healthy controller
+        repeat (5) @(negedge clk);
 
         // 2. Calibrated: write, read back, and check the halfword
         //    order in the DRAM.
