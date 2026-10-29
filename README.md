@@ -11,7 +11,7 @@ CPU-only 32-bit von Neumann system for the Sipeed Tang Primer 20K. CPU instructi
 - `system.sv` maps BSRAM at `0x0000_0000..0x0000_7fff` and 128 MiB DDR3 at `0x0800_0000..0x0fff_ffff`. The BSRAM region remains the reset/boot region.
 - `fpga_top.sv` instantiates the DDR3 PLL and controller and exposes the Tang Primer 20K dock pins, plus the reset/run buttons and CPU status LEDs. GPU, video, and RPU logic are not active.
 
-The bus is 32-bit, byte-addressed, and word-aligned. A request completes when `valid && ready`; clients hold requests stable until completion. The DDR3 window is little-endian and requires full-word write strobes. DDR3 accesses return an error until the PHY finishes initialization and calibration. The controller uses Gowin-specific DDR primitives and is intended for the Tang Primer 20K dock.
+The bus is 32-bit, byte-addressed, and word-aligned. A request completes when `valid && ready`; clients hold requests stable until completion. The DDR3 window is little-endian and requires full-word write strobes. A DDR3 access issued before the PHY has finished initialization and calibration is held until the PHY is ready, and fails with an error only if calibration never completes or the address, alignment, or write strobes violate the contract. The controller uses Gowin-specific DDR primitives and is intended for the Tang Primer 20K dock.
 
 ## Build and simulation
 
@@ -31,10 +31,16 @@ ALU differential test, CPU and system boot tests, the DDR3 CDC and target
 tests (`src/sim/testbench/memory/ddr3_*_tb.sv`), and the memory subsystem map
 test (`src/sim/testbench/memory/memory_map_tb.sv`). The DDR3 target test
 uses a behavioral controller model; it does not model the Gowin PHY pins or
-prove electrical timing on hardware. Pin-level PHY simulation follows the
-[upstream setup](https://github.com/nand2mario/ddr3-tang-primer-20k/tree/main/simulation)
-and requires Gowin's `prim_sim.v` plus Micron's DDR3 model; those external
-models are not included here.
+prove electrical timing on hardware.
+
+The regression also drives the real controller against Micron's DDR3 model
+on the DRAM pins (`src/sim/testbench/memory/ddr3_controller_tb.sv`), which
+exercises power-up initialization, ZQ calibration, write leveling, read
+calibration, write/read-back, and refresh. That test needs Gowin's
+`prim_sim.v` and Micron's model, which are third-party files and are not
+included here; `src/sim/vendor/README.md` says where to put them, and the
+regression prints a skip message when they are absent. It is by far the
+slowest test in the regression.
 
 ## Board controls
 
