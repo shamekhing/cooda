@@ -4,7 +4,7 @@ CPU-only 32-bit von Neumann system for the Sipeed Tang Primer 20K. The CPU instr
 
 ## Architecture
 
-- `cpu.sv` contains the instruction unit, decoder, execution core, register file, and ALU.
+- `cpu.sv` wires the instruction unit, decoder, execution core, register file, and ALU together.
 - `bus_arbiter.sv` is a reusable four-client round-robin arbiter for one target. It holds a grant through target stalls. The current system connects CPU instruction fetch and data access; two inactive slots reserve GPU and TPU clients for later integration. Instantiate another arbiter for each future shared target.
 - `memory.sv` checks the main-memory range and wraps the single-port, byte-write-enabled `memory_bsram`.
 - `system.sv` connects CPU request clients through the arbiter to BSRAM.
@@ -30,6 +30,11 @@ vvp /tmp/system_tb.out
 ```
 
 The test program writes `0x12345678` to main-memory address `0x100`, reads it back, and loops.
+
+The full regression is `./run.sh --no-gui`. It runs the package invariants, a
+differential test of every ALU opcode against a reference model
+(`src/sim/testbench/cpu/alu_tb.sv`), a program-level test of the CPU, bus and
+BSRAM (`src/sim/testbench/soc/cpu_tb.sv`), and the boot-program smoke test.
 
 ## Board controls
 

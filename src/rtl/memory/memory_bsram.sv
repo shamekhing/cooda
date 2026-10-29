@@ -4,7 +4,8 @@
 //
 // PHYSICAL LAYER. A plain read/write block RAM and nothing else:
 // no notion of "instruction" or "data", and no read-only mode.
-// A BSRAM is read/write by nature. Whether a region is writable is
+// A BSRAM is read/write by nature; whether a region is writable is a
+// property of the bus map above this module, not of the array.
 // The initialised program and writable data share this array.
 //
 // INIT_FILE optionally preloads the array at configuration time.
