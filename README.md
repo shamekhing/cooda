@@ -3,13 +3,13 @@
 A 32-bit von Neumann computer on the Sipeed Tang Primer 20K (Gowin
 GW2A-LV18PG256C8/I7), built from scratch in SystemVerilog. It boots from
 on-chip BSRAM, fills its 128 MiB DDR3 from a microSD card at
-configuration time — no CPU program involved — and shows the dataset
+configuration time no CPU program involved and shows the dataset
 it loaded on an HDMI monitor: one MNIST digit at a time, upscaled and
 centred, at a rate you set with buttons.
 
 Everything is RTL: a hand-rolled CPU, a round-robin bus, a DDR3
 controller over the vendor PHY primitives, an SPI card reader, and a
-TMDS display backend with no IDE-generated IP — the same HDL
+TMDS display backend with no IDE-generated IP the same HDL
 synthesizes with Gowin and simulates with Icarus.
 
 | | |
@@ -33,7 +33,7 @@ Rules for adding code: [doc/NAMING_CONVENTIONS.md](doc/NAMING_CONVENTIONS.md).
 | DDR3 controller + PHY | synthesis and P&R close timing; verified against Micron's model in simulation |
 | microSD loader | verified byte for byte against a real packer image in simulation |
 | HDMI display path | verified end to end in simulation (pixel-exact); not yet shown on a physical monitor |
-| Hardware bring-up | next step — the LEDs report how far each path got |
+| Hardware bring-up | next step the LEDs report how far each path got |
 
 ## Repository layout
 
@@ -99,8 +99,8 @@ data/mnist/                           MNIST IDX files (not included)
   the raster, the frame source, and the display fetcher. It is what the
   board actually instantiates.
 - `fpga_top.sv` is the board wrapper: it exposes the Tang Primer 20K
-  dock pins — DDR3, microSD, the two onboard buttons, two header-pin
-  rate buttons, the TMDS pairs, and the status LEDs — and wires them to
+  dock pins DDR3, microSD, the two onboard buttons, two header-pin
+  rate buttons, the TMDS pairs, and the status LEDs and wires them to
   `mnist_view_top`.
 
 ### Bus contract
@@ -138,7 +138,7 @@ Both are excluded from timing analysis as protocol CDCs.
 
 ## Getting data in: the microSD path
 
-The dock's microSD slot is wired to the FPGA in SPI mode, and the card
+The core board's microSD slot (on the SODIMM module itself) is wired to the FPGA in SPI mode, and the card
 is how data reaches DDR3: there is no assembler yet, so there is no
 software that could copy a dataset, and the loader is hardware instead.
 
@@ -203,12 +203,12 @@ about 30 seconds.
 
 The DDR3 write path is not what limits a load: a benchmark in
 `ddr3_target_tb.sv` measures sequential writes through the adapter and
-its clock crossing at 7.19 MiB/s — roughly five times the card path.
+its clock crossing at 7.19 MiB/s roughly five times the card path.
 
 The dock routes all four SD data pins, but this RTL uses them as SPI
 MISO, MOSI, CS, and clock. A native four-bit bus at 50 MHz would have a
 raw ceiling of 25 MB/s; 50 MB/s needs SDR50 at 1.8 V signaling, which
-the board's 3.3 V banks do not provide — and a four-bit card would need
+the board's 3.3 V banks do not provide and a four-bit card would need
 the DDR3 write path widened first (it moves one 32-bit word as two
 serial 16-bit commands, one transaction at a time).
 
@@ -245,7 +245,7 @@ The viewer shows one MNIST record at a time, upscaled and centred on a
 and adds the video half:
 
 1. `mnist_fetch` is a bus master on the arbiter's spare slot. One
-   `fetch_tick` copies one record — 28x28 image bytes plus its label —
+   `fetch_tick` copies one record 28x28 image bytes plus its label —
    from DDR3 into BSRAM, then reads it back and pushes it byte by byte
    into `async_fifo`. A record is only fetched once the pixel side has
    taken the previous one, so the fifo never holds more than one image.
@@ -254,8 +254,8 @@ and adds the video half:
 2. `mnist_frame_source` runs in the pixel domain. During vertical
    blanking it drains the fifo into an image store, latching the
    record's label byte last; during the active area it scans the store
-   out at 16x16 nearest-neighbour upsampling — 448x448 screen pixels,
-   centred — with the background filling the rest.
+   out at 16x16 nearest-neighbour upsampling 448x448 screen pixels,
+   centred with the background filling the rest.
 3. `hdmi_timing` generates the 720p60 raster (CEA-861) and a one-cycle
    `vblank_start` pulse marking the drain window.
 4. `hdmi_tx` serialises TMDS: three `hdmi_tmds_encoder`s (DVI 8b/10b
@@ -270,7 +270,7 @@ involved, so the same files synthesize and simulate.
 
 ### Display rate
 
-The rate is `MAX_RATE >> rate_step` — a divisor of the refresh rate, so
+The rate is `MAX_RATE >> rate_step` a divisor of the refresh rate, so
 no setting can outrun the screen. Reset lands on the slowest step, so
 bring-up never races the display:
 
@@ -290,7 +290,7 @@ ends, never wrapping.
 - Icarus Verilog (12.x) for the regression.
 - Python 3 for `tools/mnist_pack.py`.
 - Optional, for the slowest test only: Gowin's `prim_sim.v` primitive
-  models and Micron's DDR3 model — `src/sim/vendor/README.md` says where
+  models and Micron's DDR3 model `src/sim/vendor/README.md` says where
   to put them. The regression skips that test when they are absent.
 
 ### Simulate
@@ -338,7 +338,7 @@ What the tests prove:
 ### Flash
 
 Open `cooda.gprj` in Gowin EDA, run synthesis, place-and-route, and
-program the device — or drive the flow from the command line. The
+program the device or drive the flow from the command line. The
 resulting bitstream is `impl/pnr/cooda.fs`. The SDC reports zero
 violations on all five clock domains.
 
@@ -348,7 +348,7 @@ violations on all five clock domains.
 
 - **S1** (`btn_n0`, pin T3) resets the CPU, the microSD path, and the
   video path.
-- **S2** (`btn_n1`, pin T2) pauses the CPU while held — the display
+- **S2** (`btn_n1`, pin T2) pauses the CPU while held the display
   keeps running.
 - **Rate buttons** sit on header pins **T12** (`btn_n2`, show images
   faster) and **T11** (`btn_n3`, show images slower): jumper each to
@@ -370,12 +370,12 @@ Useful combinations: led1+led2 lit together means DDR3 calibration never
 finished; led3 stuck lit means the card never initialised; led4 lit
 after led3 went out means the load stopped part way. The four-bit error
 codes (`sd_err_code`, `load_err_code`) and the controller's FSM state
-stay in simulation — a waveform, or an added debug pin, says *why*.
+stay in simulation a waveform, or an added debug pin, says *why*.
 
 ### Pins
 
 The microSD slot is wired in SPI mode on `sd_cs_n` (N11), `sd_sck` (N10),
-`sd_mosi` (R14), and `sd_miso` (M8) — the mapping LiteX-Boards uses for
+`sd_mosi` (R14), and `sd_miso` (M8) the mapping LiteX-Boards uses for
 this dock. The slot also has DAT1 (M7), DAT2 (M10), and card detect
 (D15) wired; SPI mode uses none of them. The HDMI connector carries the
 four TMDS pairs: clock on G16/H15, data on H14/H16, J15/K16, K14/K15.
@@ -398,20 +398,20 @@ and the OSER10 serialisers); same-clock fabric paths remain timed.
 
 ## First flash: what to expect
 
-1. **led1/led2** go out first — DDR3 calibration finished and the reset
+1. **led1/led2** go out first DDR3 calibration finished and the reset
    released. If they stay lit, the DDR3 clock or PHY never came up.
-2. **A monitor on the HDMI port shows a uniform grey screen** — the
+2. **A monitor on the HDMI port shows a uniform grey screen** the
    raster is running, no image fetched yet. This is the first unproven
    link on real hardware; a working grey screen means the PLL, the
    serialisers, and the pin mapping are all alive.
 3. **led3 goes out** when the card answers; **led4** follows when the
    payload is in DDR3.
-4. **A first MNIST digit appears about a second later** — 448x448,
-   centred — and the display then advances one record per second.
+4. **A first MNIST digit appears about a second later** 448x448,
+   centred and the display then advances one record per second.
 5. **T12/T11 jumpered to ground** double and halve that rate.
 
 If the screen stays grey with the load complete, the display fetch
-chain is not running on hardware — check that `view_req` survived
+chain is not running on hardware check that `view_req` survived
 synthesis connected (it was once reported unconnected, and a swept
 button path is the tell-tale).
 
@@ -435,15 +435,15 @@ button path is the tell-tale).
   `src/sim/testbench/`. Details: [doc/NAMING_CONVENTIONS.md](doc/NAMING_CONVENTIONS.md).
 - Every design unit carries a header comment saying what it is for;
   every clock crossing names its mechanism.
-- `filelist.f` and `cooda.gprj` must stay in step — the same files, the
+- `filelist.f` and `cooda.gprj` must stay in step the same files, the
   same order.
 
 ## References
 
-- [nand2mario/ddr3-tang-primer-20k](https://github.com/nand2mario/ddr3-tang-primer-20k) — the DDR3 PHY this project follows.
-- Sipeed's board examples under `examples/` (HDMI, camera-to-HDMI) — the
+- [nand2mario/ddr3-tang-primer-20k](https://github.com/nand2mario/ddr3-tang-primer-20k) the DDR3 PHY this project follows.
+- Sipeed's board examples under `examples/` (HDMI, camera-to-HDMI) the
   TMDS pin mapping and the rPLL/CLKDIV configurations match theirs.
-- The [MNIST database](https://yann.lecun.com/exdb/mnist/) — the IDX
+- The [MNIST database](https://yann.lecun.com/exdb/mnist/) the IDX
   files `tools/mnist_pack.py` consumes.
 
 
