@@ -25,9 +25,11 @@ loader. Inactive and not instantiated: GPU, video output, RPU, TPU.
 
 | Clock | Frequency | Used by |
 | --- | --- | --- |
-| `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, microSD |
+| `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, microSD, image fetch |
 | `pclk` | 99.563 MHz | DDR3 controller command/data path |
 | `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serialiser (DDR3-800) |
+| `serial_clk` | 371.25 MHz | HDMI TMDS serialiser (5x the bit pairs) |
+| `pix_clk` | 74.250 MHz | raster, TMDS encoders, frame source |
 
 The DDR3 clocks come from `ddr3_pll` off the 27 MHz input. The bus and
 the DDR3 controller are unrelated clocks, so every bus transaction
@@ -38,6 +40,12 @@ crossing at a time.
 The microSD path has no clock of its own: the card is clocked from
 `clk27` through a divider (397 kHz while the card wakes up, 13.5 MHz
 for data).
+
+The video clocks come from `hdmi_rpll` off the same 27 MHz: 27 MHz x
+55/4 = 371.25 MHz for the serialisers, divided by five to 74.25 MHz
+for the pixel path. The image crosses from `clk27` to `pix_clk`
+through `async_fifo`, a grey-code pointer pair with the read data
+decoded combinationally, so the scan-out never stalls a clock domain.
 
 ## 3. Memory map
 
@@ -163,7 +171,51 @@ the window, 5 a payload word arrived while the bus was busy.
 `tools/mnist_pack.py` builds the image from MNIST IDX files and
 verifies its own output; the full training set is 91,992 blocks.
 
-## 8. Board I/O
+## 8. Display path
+
+The viewer shows one MNIST record at a time, upscaled and centred on a
+720p screen, at a rate the two extra buttons control. Everything runs
+in `mnist_view_top`, which wraps the SoC and adds the video half:
+
+1. `mnist_fetch` is a bus master on the CPU's arbiter (the slot the
+   TPU will take later). One `fetch_tick` copies one record - 28x28
+   image bytes plus its label - from DDR3 into BSRAM, then reads it
+   back and pushes it byte by byte into `async_fifo`. A record is only
+   fetched once the pixel side has taken the previous one, so the fifo
+   never holds more than one image. Record order wraps at the count in
+   the header, so the display runs forever.
+2. `mnist_frame_source` runs in the pixel domain. During vertical
+   blanking it drains the fifo into an image store, latching the
+   record's label byte last; during the active area it scans the store
+   out at SCALE x SCALE nearest-neighbour upsampling (default 16, so
+   448x448 screen pixels), centred, with the background filling the
+   rest.
+3. `hdmi_timing` generates the 720p60 raster (CEA-861: 1650x750
+   total, `frame_start` and a one-cycle `vblank_start` pulse marking
+   the drain window).
+4. `hdmi_tx` serialises TMDS: three `hdmi_tmds_encoder`s (8b/10b DVI
+   encoding with running disparity) and four `hdmi_tmds_serializer`s
+   (Gowin's OSER10 hard macro, 10:1), plus the clock channel's
+   1111100000 pattern. Each pair leaves the chip as one net that the
+   `.cst` maps onto the two pins of the board's differential pair.
+
+Rate control (`mnist_rate`): the rate is `MAX_RATE >> rate_step` - a
+divisor of the refresh rate, so no setting can outrun the screen. The
+two buttons step the exponent and hold at the ends, never wrapping:
+
+| Buttons | Rate at 60 Hz |
+| --- | --- |
+| fastest (reset value is the slowest) | 60, 30, 15, 7, 3, 1 image/s |
+
+`btn_n2` doubles, `btn_n3` halves; the dock only carries two tactile
+buttons, so the rate buttons sit on header pins T12 and T11 - jumper
+each to ground for a press.
+
+The HDMI backend is pure RTL plus Gowin hard macros (rPLL, CLKDIV,
+OSER10 - the same primitives the DDR3 PHY uses). It needs no IDE
+generated IP, so it both simulates under Icarus and commits.
+
+## 9. Board I/O
 
 | Signal | Pin | Notes |
 | --- | --- | --- |
@@ -179,20 +231,22 @@ done, led2 DDR3 read calibration done, led3 the card initialised,
 led4 the image is in DDR3, led5 nothing failed. The four-bit error
 codes are on `system`'s ports, not on pins.
 
-## 9. Implementation results
+## 10. Implementation results
 
 From the Gowin synthesis and place-and-route reports in `impl/` (the
 `.cst`/`.sdc` pair in `src/constraints/`, device GW2A-LV18PG256C8/I7):
 
-- Worst setup slack +1.891 ns, worst hold slack +0.334 ns: zero
-  violations at the documented clocks.
+- The pre-video run reported worst setup slack +1.891 ns and worst hold
+  slack +0.334 ns: zero violations at the documented clocks. The video
+  path grew the design, so re-generate the reports and re-check rather
+  than trusting numbers quoted here.
 - Resource use is dominated by the DDR3 PHY primitives and the
   controller; the CPU is small by comparison. Re-generate the reports
   after each RTL change rather than trusting numbers quoted here.
 
-## 10. Verification
+## 11. Verification
 
-`./run.sh --no-gui` runs twelve tests, all green:
+`./run.sh --no-gui` runs fifteen tests, all green:
 
 | Test | What it proves |
 | --- | --- |
@@ -207,9 +261,12 @@ From the Gowin synthesis and place-and-route reports in `impl/` (the
 | `sd_loader_tb` | the loader against a stalling bus (26 checks) |
 | `sd_image_tb` | a real packer image lands byte for byte |
 | `memory_map_tb` | decode of every window |
+| `mnist_rate_tb` | the rate ladder, both buttons, both ends |
+| `mnist_frame_source_tb` | blanking drain, upscale, centre, background |
+| `mnist_view_tb` | DDR3 to BSRAM to fifo to screen, byte for byte |
 | `ddr3_controller_tb` | the real controller against Micron's model |
 
-## 11. Known limits
+## 12. Known limits
 
 - The microSD path is one bit wide and is clocked at 13.5 MHz, so no
   change to the divider can make it faster than about 3.1 MB/s. A
@@ -217,4 +274,7 @@ From the Gowin synthesis and place-and-route reports in `impl/` (the
   1.8 V SDR50, which the board's 3.3 V banks do not provide.
 - The DDR3 write path moves one 32-bit word as two 16-bit commands,
   one transaction at a time: 7.19 MiB/s measured.
-- There is no video output, no assembler, and no TPU yet.
+- The display path has not been shown on a real monitor yet; the HDMI
+  backend is the part to watch at bring-up (the serialiser follows the
+  vendor primitive guide, but the screen is the judge).
+- There is no assembler and no TPU yet.

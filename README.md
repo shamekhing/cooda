@@ -1,8 +1,8 @@
 # COODA CPU
 
-CPU-only 32-bit von Neumann system for the Sipeed Tang Primer 20K. CPU instruction and data requests share one bus. Initialized BSRAM provides the boot region, the dock's DDR3 is additional system memory, and a hardware loader fills that memory from a microSD card at boot.
+32-bit von Neumann system for the Sipeed Tang Primer 20K. CPU instruction and data requests share one bus. Initialized BSRAM provides the boot region, the dock's DDR3 is additional system memory, a hardware loader fills that memory from a microSD card at boot, and an HDMI viewer shows MNIST images read out of that memory on a 720p screen.
 
-Technical detail and measured performance: [doc/technical_specs.md](doc/technical_specs.md). Naming rules for new code: [doc/NAMING_CONVENTIONS.md](doc/NAMING_CONVENTIONS.md).
+Technical detail and measured performance: [doc/TECHNICAL_SPECS.md](doc/TECHNICAL_SPECS.md). Naming rules for new code: [doc/NAMING_CONVENTIONS.md](doc/NAMING_CONVENTIONS.md).
 
 ## Architecture
 
@@ -12,7 +12,7 @@ Technical detail and measured performance: [doc/technical_specs.md](doc/technica
 - `memory_ddr3.sv` adapts the system bus to the DDR3 controller, including clock-domain crossing, refresh, and calibration gating.
 - `memory_sd.sv` wraps the microSD path (`sd_spi_master.sv`, `sd_controller.sv`, `sd_loader.sv` under `memory/sd/`) and is what `system.sv` instantiates when `SD_ENABLE` is set. It loads a card image into DDR3 at boot with no CPU program involved.
 - `system.sv` maps BSRAM at `0x0000_0000..0x0000_7fff` and 128 MiB DDR3 at `0x0800_0000..0x0fff_ffff`. The BSRAM region remains the reset/boot region.
-- `fpga_top.sv` instantiates the DDR3 PLL and controller and exposes the Tang Primer 20K dock pins, plus the reset/run buttons, the microSD pins, and the status LEDs. GPU, video, and RPU logic are not active.
+- `fpga_top.sv` is the board wrapper: it exposes the Tang Primer 20K dock pins - DDR3, microSD, the two onboard buttons, two header-pin rate buttons, the TMDS pairs, and the status LEDs - and wires them to `mnist_view_top`, which instantiates `system` (with `VIEW_ENABLE` set) plus the display path in `video/mnist/` and `video/hdmi/`.
 
 The bus is 32-bit, byte-addressed, and word-aligned. A request completes when `valid && ready`; clients hold requests stable until completion. The DDR3 window is little-endian and requires full-word write strobes. A DDR3 access issued before the PHY has finished initialization and calibration is held until the PHY is ready, and fails with an error only if calibration never completes or the address, alignment, or write strobes violate the contract. The controller uses Gowin-specific DDR primitives and is intended for the Tang Primer 20K dock.
 
@@ -31,13 +31,13 @@ The test program writes `0x12345678` to BSRAM address `0x100`, reads it back, an
 
 The full regression is `./run.sh --no-gui`. It runs package invariants, the
 ALU differential test, CPU and system boot tests, the DDR3 CDC and target
-tests (`src/sim/testbench/memory/ddr3_*_tb.sv`), and the memory subsystem map
+tests (`src/sim/testbench/memory/ddr3/`), and the memory subsystem map
 test (`src/sim/testbench/memory/memory_map_tb.sv`). The DDR3 target test
 uses a behavioral controller model; it does not model the Gowin PHY pins or
 prove electrical timing on hardware.
 
 The regression also drives the real controller against Micron's DDR3 model
-on the DRAM pins (`src/sim/testbench/memory/ddr3_controller_tb.sv`), which
+on the DRAM pins (`src/sim/testbench/memory/ddr3/ddr3_controller_tb.sv`), which
 exercises power-up initialization, ZQ calibration, write leveling, read
 calibration, write/read-back, and refresh. That test needs Gowin's
 `prim_sim.v` and Micron's model, which are third-party files and are not
@@ -46,7 +46,7 @@ regression prints a skip message when they are absent. It is by far the
 slowest test in the regression.
 
 The microSD path is covered by four tests under
-`src/sim/testbench/memory/`: `sd_spi_master_tb.sv` (the byte engine, bit
+`src/sim/testbench/memory/sd/`: `sd_spi_master_tb.sv` (the byte engine, bit
 order, and both card speeds), `sd_controller_tb.sv` (the wake-up sequence
 command by command, SDHC and SDSC addressing, and every error path),
 `sd_loader_tb.sv` (the loader against a bus target that stalls and checks
@@ -122,12 +122,14 @@ and the loader reports `load_err_code`:
 | 4 | the destination does not fit in the DDR3 window |
 | 5 | a payload word arrived while the bus was still busy |
 
-The whole path is verified in simulation, including a real image from `tools/mnist_pack.py` byte for byte. It has not been brought up on a card yet: hardware bring-up is the next step, which is why the LEDs show how far a load got.
+The whole path is verified in simulation, including a real image from `tools/mnist_pack.py` byte for byte, and the display test (`mnist_view_tb`) shows those bytes landing pixel-perfect on the modelled screen. Neither path has been brought up on hardware yet: card and monitor bring-up are the next steps, which is why the LEDs show how far a load got.
 
 ## Board controls
 
-- S1 (`btn_n0`) resets the CPU and the microSD path.
+- S1 (`btn_n0`) resets the CPU, the microSD path and the video path.
 - S2 (`btn_n1`) pauses execution while held.
+- The two rate buttons for the MNIST viewer sit on header pins T12 (`btn_n2`, show images faster) and T11 (`btn_n3`, show images slower) - jumper each to ground for a press; the dock only carries the two tactile buttons.
+- The HDMI connector carries a 720p60 TMDS stream showing the MNIST records the card image holds, one image at a time (448x448, centred), starting at 1 image/s; the rate buttons double or halve it, bounded at 60 and 1. The backend is pure RTL plus Gowin hard macros (rPLL, CLKDIV, OSER10) - no IDE-generated IP, so it simulates under Icarus and commits. See `doc/TECHNICAL_SPECS.md`, section 8.
 - LED0 indicates recent instruction retirement.
 - LED1 indicates DDR3 write leveling done; LED2 indicates DDR3 read calibration done.
 - LED3 indicates the card answered the wake-up sequence; LED4 indicates the card image is in DDR3; LED5 indicates nothing failed (DDR3, the card, or the image).
@@ -142,4 +144,4 @@ The physical pin assignments, including DDR3 and microSD, are in `src/constraint
 
 ## Timing constraints
 
-The SDC names the rPLL outputs explicitly: DDR serializer `fclk` at 398.25 MHz, controller `pclk` at 99.563 MHz, and phase-shifted DDR `ck` at 398.25 MHz. It excludes the `clk27`/`pclk` bus CDC paths and the `pclk`-to-`fclk` hard-PHY interface paths; same-clock fabric paths remain timed. A Gowin synthesis and place-and-route run completed with zero setup or hold violations. The reported worst setup slack was +1.891 ns and worst hold slack was +0.334 ns.
+The SDC names the PLL outputs explicitly: DDR serializer `fclk` at 398.25 MHz, controller `pclk` at 99.563 MHz, phase-shifted DDR `ck` at 398.25 MHz, TMDS serializer clock at 371.25 MHz, and pixel clock at 74.25 MHz. It excludes the bus CDC paths (`clk27`/`pclk` and `clk27`/pixel) and the hard-PHY/OSER10 clock-to-clock interface paths; same-clock fabric paths remain timed. Timing closure status is per the latest Gowin run - the video path grew the design, so check the latest report.
