@@ -111,3 +111,18 @@ IO_PORT "DDR3_DM[0]" IO_TYPE=SSTL15 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 
 // Keep the PLL in the location used by the calibrated upstream PHY.
 INS_LOC "pll/rpll_inst" PLL_L[0];
+
+// microSD card, SPI mode. These are the pins the dock's slot is wired
+// to (the same mapping LiteX-Boards uses for this board), and they are
+// the four an SPI-mode card needs out of the six the slot has: DAT1
+// (M7) and DAT2 (M10) are wired but unused, and D15 is card detect.
+// The whole path runs in the clk27 domain, at 397 kHz while the card
+// wakes up and 13.5 MHz for data, so nothing here needs a new clock.
+IO_LOC  "sd_cs_n" N11;
+IO_PORT "sd_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "sd_sck" N10;
+IO_PORT "sd_sck" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "sd_mosi" R14;
+IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "sd_miso" M8;
+IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;

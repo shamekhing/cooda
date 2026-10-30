@@ -3,7 +3,8 @@
 // ============================================================
 module system #(
     parameter INIT_FILE = "src/programs/boot_program.hex",
-    parameter bit DDR3_ENABLE = 1'b0
+    parameter bit DDR3_ENABLE = 1'b0,
+    parameter bit SD_ENABLE   = 1'b0
 ) (
     input  logic clk,
     input  logic rst,
@@ -35,7 +36,23 @@ module system #(
     // DDR3_ENABLE is 0.
     output logic ddr_write_level_done,
     output logic ddr_read_calib_done,
-    output logic ddr_err
+    output logic ddr_err,
+
+    // microSD card pins. Idle when SD_ENABLE is 0.
+    output logic sd_cs_n,
+    output logic sd_sck,
+    output logic sd_mosi,
+    input  logic sd_miso,
+
+    // microSD bring-up status for the board LEDs. All low when
+    // SD_ENABLE is 0.
+    output logic        sd_ready,
+    output logic [1:0]  sd_card_type,
+    output logic        sd_error,
+    output logic [3:0]  sd_err_code,
+    output logic        load_done,
+    output logic        load_error,
+    output logic [3:0]  load_err_code
 );
     soc_pkg::bus_req_s instr_req, data_req;
     soc_pkg::bus_rsp_s instr_rsp, data_rsp;
@@ -57,7 +74,45 @@ module system #(
     logic [2:0] rclksel;
     logic [63:0] ddr_debug;
 
-    assign gpu_req = '0;
+    // The microSD loader is a boot-time bus master. It takes arbiter
+    // slot 2 (the GPU slot, still unused) and leaves slot 3 free for
+    // the TPU. It runs once after reset and then holds its request
+    // low, so a later GPU block can share the slot with a valid gate.
+    generate
+        if (SD_ENABLE) begin : gen_sd
+            soc_pkg::bus_req_s sd_req;
+            logic [4:0] sd_ctrl_state;
+            logic [31:0] sd_blocks_loaded, sd_bytes_loaded;
+
+            memory_sd u_memory_sd (
+                .clk(clk), .rst(rst),
+                .sd_cs_n(sd_cs_n), .sd_sck(sd_sck),
+                .sd_mosi(sd_mosi), .sd_miso(sd_miso),
+                .bus_req(sd_req), .bus_rsp(gpu_rsp),
+                .sd_ready(sd_ready), .card_type(sd_card_type),
+                .sd_error(sd_error), .sd_err_code(sd_err_code),
+                .ctrl_state(sd_ctrl_state),
+                .load_done(load_done), .load_error(load_error),
+                .load_err_code(load_err_code),
+                .blocks_loaded(sd_blocks_loaded),
+                .bytes_loaded(sd_bytes_loaded)
+            );
+
+            assign gpu_req = sd_req;
+        end else begin : gen_no_sd
+            assign gpu_req = '0;
+            assign sd_cs_n    = 1'b1;
+            assign sd_sck     = 1'b0;
+            assign sd_mosi    = 1'b1;
+            assign sd_ready   = 1'b0;
+            assign sd_card_type = 2'd0;
+            assign sd_error   = 1'b0;
+            assign sd_err_code = 4'd0;
+            assign load_done  = 1'b0;
+            assign load_error = 1'b0;
+            assign load_err_code = 4'd0;
+        end
+    endgenerate
     assign tpu_req = '0;
 
     cpu u_cpu (

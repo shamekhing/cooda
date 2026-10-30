@@ -17,6 +17,10 @@ module fpga_top (
     output wire        DDR3_nRESET,
     output wire [1:0]  DDR3_DM,
     output wire        DDR3_ODT,
+    output wire        sd_cs_n,
+    output wire        sd_sck,
+    output wire        sd_mosi,
+    input  wire        sd_miso,
     output logic led0,
     output logic led1,
     output logic led2,
@@ -29,6 +33,9 @@ module fpga_top (
     logic rst, user_rst, run;
     logic retire_valid, illegal_instr, cpu_fault;
     logic ddr_write_level_done, ddr_read_calib_done, ddr_err;
+    logic sd_ready, sd_error, load_done, load_error;
+    logic [1:0] sd_card_type;
+    logic [3:0] sd_err_code, load_err_code;
     logic [19:0] activity_count;
     logic ddr_pclk, ddr_fclk, ddr_ck, ddr_pll_lock;
     logic ddr_reset_async;
@@ -61,7 +68,7 @@ module fpga_top (
     assign rst = user_rst || !ddr_pll_lock;
     assign run = run_sync[1];
 
-    system #(.DDR3_ENABLE(1'b1)) u_system (
+    system #(.DDR3_ENABLE(1'b1), .SD_ENABLE(1'b1)) u_system (
         .clk(clk27), .rst(rst), .run(run),
         .ddr_pclk(ddr_pclk), .ddr_fclk(ddr_fclk), .ddr_ck(ddr_ck),
         .ddr_rst(ddr_rst),
@@ -75,7 +82,13 @@ module fpga_top (
         .illegal_instr(illegal_instr), .cpu_fault(cpu_fault),
         .ddr_write_level_done(ddr_write_level_done),
         .ddr_read_calib_done(ddr_read_calib_done),
-        .ddr_err(ddr_err)
+        .ddr_err(ddr_err),
+        .sd_cs_n(sd_cs_n), .sd_sck(sd_sck),
+        .sd_mosi(sd_mosi), .sd_miso(sd_miso),
+        .sd_ready(sd_ready), .sd_card_type(sd_card_type),
+        .sd_error(sd_error), .sd_err_code(sd_err_code),
+        .load_done(load_done), .load_error(load_error),
+        .load_err_code(load_err_code)
     );
 
     always_ff @(posedge clk27) begin
@@ -84,14 +97,18 @@ module fpga_top (
         else if (activity_count != '0) activity_count <= activity_count - 1'b1;
     end
 
-    // Dock LEDs are active-low.
+    // Dock LEDs are active-low. led0..led2 are the CPU and DDR3
+    // bring-up indicators; led3..led5 are the microSD path, which is
+    // what a board with a card in it shows:
+    //   led3  the card answered the wake-up sequence
+    //   led4  the image is in DDR3
+    //   led5  something failed (DDR3, the card, or the image)
+    // Six LEDs cannot show everything: cpu_fault, illegal_instr and the
+    // four-bit error codes stay in simulation, and system exports them.
     assign led0 = (activity_count == '0);
-    assign led1 = ~cpu_fault;
-    assign led2 = ~illegal_instr;
-    // DDR3 bring-up: write leveling, read calibration, and a latched
-    // access error. A board with no working DRAM shows led3/led4 lit
-    // and led5 off; both lit means calibration never finished.
-    assign led3 = ~ddr_write_level_done;
-    assign led4 = ~ddr_read_calib_done;
-    assign led5 = ~ddr_err;
+    assign led1 = ~ddr_write_level_done;
+    assign led2 = ~ddr_read_calib_done;
+    assign led3 = ~sd_ready;
+    assign led4 = ~load_done;
+    assign led5 = ~(ddr_err | sd_error | load_error);
 endmodule
