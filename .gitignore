@@ -13,6 +13,14 @@
 examples/
 src/sim/build/
 src/sim/waveforms/
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# local datasets and generated card images
 data/
+*.img
+
 src/sim/vendor/ddr3/
 src/sim/vendor/prim_sim.v

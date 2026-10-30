@@ -127,7 +127,7 @@ further. Nothing here bounds the *read* side below about 22 MB/s.
 
 ## 7. microSD path
 
-The dock's slot is wired in SPI mode on four pins (`sd_cs_n` N11,
+The core board's slot (on the SODIMM module, not the dock) is wired in SPI mode on four pins (`sd_cs_n` N11,
 `sd_sck` N10, `sd_mosi` R14, `sd_miso` M8); DAT1, DAT2 and card detect
 are routed but unused. Three layers, all clocked from `clk27`:
 
