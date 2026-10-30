@@ -39,10 +39,13 @@
         <File path="src/rtl/soc/system.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/util/async_fifo.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/util/button_debounce.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/mnist/mnist_fetch.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/mnist/mnist_frame_source.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/mnist/mnist_rate.sv" type="file.verilog" enable="1"/>
-        <File path="src/rtl/video/mnist/mnist_view_top.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/uart/uart_rx.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/uart/uart_tx.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/mnist/mnist_uart_loader.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/mnist/mnist_fetch.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/mnist/mnist_frame_source.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/mnist/mnist_rate.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/mnist/mnist_view_top.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/video/hdmi/hdmi_rpll.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/video/hdmi/hdmi_tmds_encoder.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/video/hdmi/hdmi_tmds_serializer.sv" type="file.verilog" enable="1"/>

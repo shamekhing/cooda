@@ -5,7 +5,9 @@ module system #(
     parameter INIT_FILE = "src/programs/boot_program.hex",
     parameter bit DDR3_ENABLE = 1'b0,
     parameter bit SD_ENABLE   = 1'b0,
-    parameter bit VIEW_ENABLE = 1'b0
+    parameter bit VIEW_ENABLE = 1'b0,
+    parameter bit UART_ENABLE = 1'b0,
+    parameter int UART_BAUD_RATE = 921600
 ) (
     input  logic clk,
     input  logic rst,
@@ -54,6 +56,12 @@ module system #(
     output logic        load_done,
     output logic        load_error,
     output logic [3:0]  load_err_code,
+    input  logic        uart_rx_pin,
+    output logic        uart_tx_pin,
+    output logic        uart_ready,
+    output logic        uart_load_done,
+    output logic        uart_load_error,
+    output logic        ddr_ready,
 
     // A fourth bus client for the display test: the module that moves
     // one MNIST record from DDR3 into BSRAM per frame tick. Driven
@@ -82,12 +90,45 @@ module system #(
     logic [2:0] rclksel;
     logic [63:0] ddr_debug;
 
-    // The microSD loader is a boot-time bus master. It takes arbiter
-    // slot 2 (the GPU slot, still unused) and leaves slot 3 free for
-    // the TPU. It runs once after reset and then holds its request
-    // low, so a later GPU block can share the slot with a valid gate.
+    // The selected dataset loader is a boot-time bus master on arbiter
+    // slot 2. UART and SD are mutually exclusive build options. Slot 3
+    // serves the display fetcher when enabled and is otherwise reserved
+    // for the TPU.
     generate
-        if (SD_ENABLE) begin : gen_sd
+        // UART and SD share arbiter slot 2; select only one loader at build
+        // time so the host transfer and card reader cannot drive it together.
+        if (UART_ENABLE) begin : gen_uart
+            soc_pkg::bus_req_s uart_req;
+            logic [3:0] uart_error_code;
+
+            mnist_uart_loader #(
+                .BAUD_RATE(UART_BAUD_RATE)
+            ) u_uart_loader (
+                .clk(clk),
+                .rst(rst),
+                .ddr_ready(ddr_ready),
+                .uart_rx_pin(uart_rx_pin),
+                .uart_tx_pin(uart_tx_pin),
+                .host_ready(uart_ready),
+                .load_done(uart_load_done),
+                .load_error(uart_load_error),
+                .error_code(uart_error_code),
+                .bus_req(uart_req),
+                .bus_rsp(gpu_rsp)
+            );
+
+            assign gpu_req = uart_req;
+            assign sd_cs_n = 1'b1;
+            assign sd_sck = 1'b0;
+            assign sd_mosi = 1'b1;
+            assign sd_ready = 1'b0;
+            assign sd_card_type = 2'd0;
+            assign sd_error = 1'b0;
+            assign sd_err_code = 4'd0;
+            assign load_done = 1'b0;
+            assign load_error = 1'b0;
+            assign load_err_code = 4'd0;
+        end else if (SD_ENABLE) begin : gen_sd
             soc_pkg::bus_req_s sd_req;
             logic [4:0] sd_ctrl_state;
             logic [31:0] sd_blocks_loaded, sd_bytes_loaded;
@@ -107,6 +148,10 @@ module system #(
             );
 
             assign gpu_req = sd_req;
+            assign uart_tx_pin = 1'b1;
+            assign uart_ready = 1'b0;
+            assign uart_load_done = 1'b0;
+            assign uart_load_error = 1'b0;
         end else begin : gen_no_sd
             assign gpu_req = '0;
             assign sd_cs_n    = 1'b1;
@@ -119,6 +164,10 @@ module system #(
             assign load_done  = 1'b0;
             assign load_error = 1'b0;
             assign load_err_code = 4'd0;
+            assign uart_tx_pin = 1'b1;
+            assign uart_ready = 1'b0;
+            assign uart_load_done = 1'b0;
+            assign uart_load_error = 1'b0;
         end
     endgenerate
 
@@ -171,7 +220,8 @@ module system #(
                 .ctl_addr(ctl_addr), .ctl_din(ctl_din), .ctl_dout(ctl_dout),
                 .ctl_busy(ctl_busy), .ctl_data_ready(ctl_data_ready),
                 .ctl_ready(write_level_done && read_calib_done),
-                .err_sticky(ddr_err)
+                .err_sticky(ddr_err),
+                .ready(ddr_ready)
             );
 
             ddr3_controller u_ddr3_controller (
@@ -198,6 +248,7 @@ module system #(
             assign write_level_done = 1'b0;
             assign read_calib_done  = 1'b0;
             assign ddr_err          = 1'b0;
+            assign ddr_ready        = 1'b0;
         end
         if (DDR3_ENABLE) begin : gen_ddr3_response
             assign ddr_rsp = ddr_target_rsp;

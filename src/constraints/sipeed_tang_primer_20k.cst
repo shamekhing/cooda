@@ -148,3 +148,9 @@ IO_LOC  "sd_mosi" R14;
 IO_PORT "sd_mosi" IO_TYPE=LVCMOS15 PULL_MODE=UP DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC  "sd_miso" M8;
 IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+
+// On-board USB-UART bridge pins (same mapping as examples/UART).
+IO_LOC  "uart_tx_pin" M11;
+IO_PORT "uart_tx_pin" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "uart_rx_pin" T13;
+IO_PORT "uart_rx_pin" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;

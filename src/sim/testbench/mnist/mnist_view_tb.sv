@@ -71,7 +71,7 @@ module mnist_view_tb;
 
     // The card image as the loader leaves it: the payload copied to the
     // DDR3 window (the header stays on the card), N records then N
-    // label bytes, per tools/mnist_pack.py.
+    // label bytes, per tools/mnist/mnist_pack.py.
     function automatic int record_base(input int r);
         record_base = r * RECORD_BYTES;
     endfunction

@@ -68,6 +68,8 @@ module memory_ddr3 #(
     // Sticky "a DDR3 access failed" flag for board bring-up. It stays
     // up until reset, so a transient error is still visible on an LED.
     output logic        err_sticky,
+    // Calibration-ready status synchronized into the SoC clock domain.
+    output logic        ready,
 
     // ---------------- DDR3 controller domain ----------------
     input  logic        clk_ddr,
@@ -95,6 +97,7 @@ module memory_ddr3 #(
     // --------------------------------------------------------
 
     logic ctl_ready_s1, ctl_ready_s2;
+    assign ready = ctl_ready_s2;
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -468,4 +471,3 @@ module memory_ddr3 #(
     end
 
 endmodule
-

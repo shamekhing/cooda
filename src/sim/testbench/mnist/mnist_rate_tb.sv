@@ -165,4 +165,3 @@ module mnist_rate_tb;
     end
 
 endmodule
-

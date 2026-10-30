@@ -1,12 +1,16 @@
 // ============================================================
 // fpga_top  Tang Primer 20K board wrapper: pins to the viewer SoC
 // ============================================================
-// Everything else - DDR3 clocks, the microSD loader, the CPU, the
+// Everything else - DDR3 clocks, the UART/microSD loader, the CPU, the
 // HDMI display path and the LED meanings - lives in mnist_view_top.
 // The two rate buttons sit on header pins (T12, T11): short them to
 // ground for a press.
 // ============================================================
-module fpga_top (
+module fpga_top #(
+    parameter bit UART_ENABLE = 1'b1,
+    parameter bit SD_ENABLE = 1'b0,
+    parameter int UART_BAUD_RATE = 921600
+) (
     input  logic clk27,
     input  logic btn_n0,
     input  logic btn_n1,
@@ -28,6 +32,8 @@ module fpga_top (
     output wire        sd_sck,
     output wire        sd_mosi,
     input  wire        sd_miso,
+    input  wire        uart_rx_pin,
+    output wire        uart_tx_pin,
     output wire        tmds_clk,
     output wire [2:0]  tmds_data,
     output logic led0,
@@ -38,7 +44,11 @@ module fpga_top (
     output logic led5
 );
 
-    mnist_view_top u_soc (
+    mnist_view_top #(
+        .UART_ENABLE(UART_ENABLE),
+        .SD_ENABLE(SD_ENABLE),
+        .UART_BAUD_RATE(UART_BAUD_RATE)
+    ) u_soc (
         .clk27(clk27),
         .btn_n0(btn_n0), .btn_n1(btn_n1),
         .btn_n2(btn_n2), .btn_n3(btn_n3),
@@ -50,6 +60,7 @@ module fpga_top (
         .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT),
         .sd_cs_n(sd_cs_n), .sd_sck(sd_sck),
         .sd_mosi(sd_mosi), .sd_miso(sd_miso),
+        .uart_rx_pin(uart_rx_pin), .uart_tx_pin(uart_tx_pin),
         .tmds_clk(tmds_clk), .tmds_data(tmds_data),
         .led0(led0), .led1(led1), .led2(led2),
         .led3(led3), .led4(led4), .led5(led5)

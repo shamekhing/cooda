@@ -7,7 +7,7 @@
 #   ./run.sh --help       show usage
 #
 # The regression runs the package, ALU, CPU, system boot, DDR3 interface,
-# microSD, and MNIST display tests under Icarus, plus the DDR3 controller
+# UART, microSD, and MNIST display tests under Icarus, plus the DDR3 controller
 # test when local vendor models are installed. The controller test is much
 # slower than the rest - minutes rather than seconds - because the Micron
 # and Gowin primitive models make every DRAM access expensive.
@@ -25,7 +25,7 @@ for arg in "$@"; do
             ;;
         --help|-h)
             echo "usage: $0 [--no-gui]"
-            echo "  runs package, ALU, CPU, system, and DDR3 interface tests."
+            echo "  runs package, ALU, CPU, system, DDR3, UART, SD, and video tests."
             exit 0
             ;;
         *)
@@ -37,6 +37,9 @@ for arg in "$@"; do
 done
 
 mkdir -p src/sim/build src/sim/waveforms
+
+echo "========== MNIST HOST TOOL TESTS =========="
+python3 -m unittest discover -s tools/mnist -p 'test_*.py'
 
 run_test() {
     local label="$1"
@@ -84,6 +87,14 @@ run_test "DDR3 TARGET / WRITE THROUGHPUT" ddr3_target_tb ddr3_target_sim "" \
     -f filelist.f \
     src/sim/testbench/memory/ddr3/ddr3_target_tb.sv
 
+run_test "UART BYTE LOOPBACK" uart_tb uart_sim "" \
+    -f filelist.f \
+    src/sim/testbench/uart/uart_tb.sv
+
+run_test "MNIST UART LOADER" mnist_uart_loader_tb mnist_uart_loader_sim "" \
+    -f filelist.f \
+    src/sim/testbench/mnist/mnist_uart_loader_tb.sv
+
 run_test "SD SPI MASTER" sd_spi_master_tb sd_spi_master_sim "" \
     -f filelist.f \
     src/sim/testbench/memory/sd/sd_spi_master_tb.sv
@@ -100,24 +111,24 @@ run_test "SD LOADER" sd_loader_tb sd_loader_sim "" \
 
 run_test "MNIST RATE LADDER" mnist_rate_tb mnist_rate_sim "" \
     -f filelist.f \
-    src/sim/testbench/video/mnist/mnist_rate_tb.sv
+    src/sim/testbench/mnist/mnist_rate_tb.sv
 
 run_test "MNIST FRAME SOURCE" mnist_frame_source_tb mnist_frame_source_sim "" \
     -f filelist.f \
-    src/sim/testbench/video/mnist/mnist_frame_source_tb.sv
+    src/sim/testbench/mnist/mnist_frame_source_tb.sv
 
 run_test "MNIST VIEW END TO END" mnist_view_tb mnist_view_sim "" \
     -f filelist.f \
-    src/sim/testbench/video/mnist/mnist_view_tb.sv
+    src/sim/testbench/mnist/mnist_view_tb.sv
 
 # The end-to-end test needs a card image, which comes from the MNIST IDX
 # files in data/mnist. Build a small one from them and check that every
 # byte of it arrives; skip both steps when the data is not installed.
-if [[ -f data/mnist/train-images.idx3-ubyte && \
-      -f data/mnist/train-labels.idx1-ubyte ]]; then
-    python3 tools/mnist_pack.py \
-        --images data/mnist/train-images.idx3-ubyte \
-        --labels data/mnist/train-labels.idx1-ubyte \
+if [[ -f data/mnist/train-images-idx3-ubyte && \
+      -f data/mnist/train-labels-idx1-ubyte ]]; then
+    python3 tools/mnist/mnist_pack.py \
+        --images data/mnist/train-images-idx3-ubyte \
+        --labels data/mnist/train-labels-idx1-ubyte \
         --limit 12 --out data/mnist/sd_image.img > /dev/null
 
     run_test "SD IMAGE END TO END" sd_image_tb sd_image_sim "" \

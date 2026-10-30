@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn MNIST IDX files into the raw card image sd_loader expects.
+"""Turn MNIST IDX files into the packed image UART and SD loaders expect.
 
 The image is a header block followed by the payload:
 
@@ -29,7 +29,7 @@ Write the file at LBA 0 of a dedicated card:
 or, to leave a card's own filesystem alone, build the image for a
 reserved LBA and seek to it:
 
-    python3 tools/mnist_pack.py ... --dest-offset 0
+    python3 tools/mnist/mnist_pack.py ... --dest-offset 0
     sudo dd if=mnist.img of=/dev/sdX bs=512 seek=1048576 conv=fsync
 
 and set HDR_LBA to 1048576 in fpga_top's memory_sd instantiation.
@@ -81,7 +81,7 @@ def read_idx(path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build a COODA microSD image from MNIST IDX files.")
+        description="Build a COODA packed image from MNIST IDX files.")
     parser.add_argument("--images", required=True,
                         help="IDX image file, e.g. train-images-idx3-ubyte")
     parser.add_argument("--labels", required=True,

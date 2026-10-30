@@ -196,4 +196,3 @@ module mnist_frame_source #(
     end
 
 endmodule
-
