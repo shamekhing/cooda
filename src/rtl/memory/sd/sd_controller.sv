@@ -29,9 +29,11 @@
 //
 // READ SEQUENCE (per block)
 //   CMD17      read one block. R1 = 0x00 means accepted; anything
-//              else is an error and the read stops.
+//              else is an error and the read stops. This issues a
+//              separate single-block command for every block; no
+//              multi-block streaming yet.
 //   token      the card sends 0xFF bytes while it works, then
-//              0xFE to say "data follows". Bounded by TOKEN_MAX so
+//              0xFE to say "data follows". Bounded by TOKEN_TIMEOUT_BYTES so
 //              a card that never answers cannot hang the SoC.
 //   data       512 bytes = 128 bus words, MSB byte first on the
 //              wire, assembled little endian (the first byte of a
@@ -57,29 +59,32 @@
 //     4 CMD58   no valid R1, or R1 was not 0x00
 //     5 CMD16   no valid R1, or R1 was not 0x00
 //     6 CMD17   no valid R1, or R1 was not 0x00
-//     7 token   no 0xFE data token within TOKEN_MAX bytes
+//     7 token   no 0xFE data token within TOKEN_TIMEOUT_BYTES bytes
 //
 // SPEED
-//   DIV_INIT for everything up to and including CMD16, DIV_DATA
-//   from CMD17 onwards.
+//   DIVIDER_INIT for everything up to and including CMD16, DIVIDER_DATA
+//   from CMD17 onwards. SPI moves one data bit per SCK cycle, so at
+//   13.5 MHz the absolute wire ceiling is 1.69 MB/s before gaps,
+//   command overhead, and card latency. Reaching tens of MB/s needs
+//   the native four-bit SD bus and its PHY, not a faster SPI sequencer.
 //
 // HANDSHAKE
-//   blk_req is a pulse with blk_addr stable; it is only looked at
+//   block_req is a pulse with block_addr stable; it is only looked at
 //   in the idle state, so one request is in flight at a time.
-//   blk_busy is high from the request until the block is finished.
-//   Each of the 128 words arrives as a one-cycle blk_valid pulse
-//   with blk_data, in order. blk_done ends the block. error and
+//   block_busy is high from the request until the block is finished.
+//   Each of the 128 words arrives as a one-cycle block_valid pulse
+//   with block_data, in order. block_done ends the block. error and
 //   err_code are sticky and mean the request failed.
 // ============================================================
 
 module sd_controller #(
-    parameter int DIV_W         = 16,
-    parameter logic [DIV_W-1:0] DIV_INIT = 16'd34,  // 397 kHz at 27 MHz
-    parameter logic [DIV_W-1:0] DIV_DATA = 16'd1,   // 13.5 MHz at 27 MHz
+    parameter int DIVIDER_WIDTH         = 16,
+    parameter logic [DIVIDER_WIDTH-1:0] DIVIDER_INIT = 16'd34,  // 397 kHz at 27 MHz
+    parameter logic [DIVIDER_WIDTH-1:0] DIVIDER_DATA = 16'd1,   // 13.5 MHz at 27 MHz
     parameter int POWERUP_BYTES = 10,       // 80 clocks with cs_n high
-    parameter int POLL_MAX      = 16,       // bytes to wait for an R1
-    parameter int RETRY_MAX     = 8000,     // ACMD41 attempts, ~2 s
-    parameter int TOKEN_MAX     = 4096      // bytes to wait for 0xFE
+    parameter int R1_POLL_BYTES      = 16,       // bytes to wait for an R1
+    parameter int ACMD41_MAX_RETRIES     = 8000,     // ACMD41 attempts, ~2 s
+    parameter int TOKEN_TIMEOUT_BYTES     = 4096      // bytes to wait for 0xFE
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -91,12 +96,12 @@ module sd_controller #(
     input  logic        miso,
 
     // block read request
-    input  logic        blk_req,
-    input  logic [31:0] blk_addr,
-    output logic        blk_busy,
-    output logic        blk_done,
-    output logic [31:0] blk_data,
-    output logic        blk_valid,
+    input  logic        block_req,
+    input  logic [31:0] block_addr,
+    output logic        block_busy,
+    output logic        block_done,
+    output logic [31:0] block_data,
+    output logic        block_valid,
 
     // status
     output logic        ready,
@@ -144,20 +149,20 @@ module sd_controller #(
                            CT_SDHC    = 2'd3;
 
     typedef enum logic [4:0] {
-        ST_POWERUP = 5'd0,      // idle clocks with cs_n high
-        ST_SEND    = 5'd1,      // six command bytes from cmd_sh
-        ST_R1      = 5'd2,      // poll for R1, then act on it
-        ST_R7      = 5'd3,      // CMD8's four extra bytes
-        ST_R3      = 5'd4,      // CMD58's four OCR bytes
-        ST_TOKEN   = 5'd5,      // wait for the 0xFE data token
-        ST_DATA    = 5'd6,      // 512 bytes of block data
-        ST_CRC     = 5'd7,      // two CRC bytes, ignored
-        ST_TAIL    = 5'd8,      // cs_n high, one idle byte
-        ST_IDLE    = 5'd9,      // ready for a block request
-        ST_ERROR   = 5'd10      // sticky error
-    } state_e;
+        SdPowerUp    = 5'd0,     // idle clocks with cs_n high
+        SdSendCmd    = 5'd1,     // six command bytes from cmd_shift_q
+        SdPollR1     = 5'd2,     // poll for R1, then act on it
+        SdReadR7     = 5'd3,     // CMD8's four extra bytes
+        SdReadR3     = 5'd4,     // CMD58's four OCR bytes
+        SdWaitToken  = 5'd5,     // wait for the 0xFE data token
+        SdReadData   = 5'd6,     // 512 bytes of block data
+        SdReadCrc    = 5'd7,     // two CRC bytes, ignored
+        SdDeselect   = 5'd8,     // cs_n high, one idle byte
+        SdIdle       = 5'd9,     // ready for a block request
+        SdFail       = 5'd10     // sticky error
+    } sd_controller_state_e;
 
-    state_e state;
+    sd_controller_state_e state_q;
 
     // ========================================================
     // BYTE ENGINE
@@ -165,14 +170,14 @@ module sd_controller #(
 
     logic             spi_start, spi_done, spi_busy;
     logic [7:0]       spi_tx, spi_rx;
-    logic [DIV_W-1:0] div_reg;
+    logic [DIVIDER_WIDTH-1:0] divider_q;
 
-    sd_spi_master #(.DIV_W(DIV_W)) u_spi (
+    sd_spi_master #(.DIVIDER_WIDTH(DIVIDER_WIDTH)) u_spi (
         .clk     (clk),
         .rst     (rst),
         .start   (spi_start),
         .tx      (spi_tx),
-        .divider (div_reg),
+        .divider (divider_q),
         .busy    (spi_busy),
         .done    (spi_done),
         .rx      (spi_rx),
@@ -185,36 +190,36 @@ module sd_controller #(
     // SEQUENCER STATE
     // ========================================================
 
-    logic [47:0] cmd_sh;        // command frame, shifted out MSB first
-    logic [31:0] resp_sh;       // response bytes, shifted in
+    logic [47:0] cmd_shift_q;        // command frame, shifted out MSB first
+    logic [31:0] resp_shift_q;       // response bytes, shifted in
     logic [2:0]  cmd_id;        // which command is in flight
-    logic [15:0] cnt;           // byte counter inside a state
-    logic [15:0] retry;         // ACMD41 attempts so far
-    logic [31:0] word;          // block word being assembled
-    logic [6:0]  word_idx;      // 0..127 inside a block
-    logic [1:0]  byte_idx;      // 0..3 inside a word
-    logic        busy_r;        // a block request is in flight
+    logic [15:0] byte_count;           // byte counter inside a state
+    logic [15:0] acmd41_tries;         // ACMD41 attempts so far
+    logic [31:0] data_word;          // block word being assembled
+    logic [6:0]  word_index;      // 0..127 inside a block
+    logic [1:0]  byte_index;      // 0..3 inside a word
+    logic        busy_q;        // a block request is in flight
 
-    assign state_dbg = state;
-    assign blk_busy  = busy_r;
+    assign state_dbg = state_q;
+    assign block_busy  = busy_q;
 
     // The response bytes with the byte just clocked in included, so a
     // multi-byte response can be judged on the cycle its last byte
-    // arrives (resp_sh itself only sees that byte on the next edge).
+    // arrives (resp_shift_q itself only sees that byte on the next edge).
     logic [31:0] resp_next;
-    assign resp_next = {resp_sh[23:0], spi_rx};
+    assign resp_next = {resp_shift_q[23:0], spi_rx};
 
     // Which error code a failed R1 poll belongs to.
-    function automatic logic [3:0] err_for(input logic [2:0] id);
+    function automatic logic [3:0] err_code_for(input logic [2:0] id);
         case (id)
-            CID_CMD0:   err_for = ERR_CMD0;
-            CID_CMD8:   err_for = ERR_CMD8;
-            CID_CMD55:  err_for = ERR_ACMD41;
-            CID_ACMD41: err_for = ERR_ACMD41;
-            CID_CMD58:  err_for = ERR_CMD58;
-            CID_CMD16:  err_for = ERR_CMD16;
-            CID_CMD17:  err_for = ERR_CMD17;
-            default:    err_for = ERR_CMD0;
+            CID_CMD0:   err_code_for = ERR_CMD0;
+            CID_CMD8:   err_code_for = ERR_CMD8;
+            CID_CMD55:  err_code_for = ERR_ACMD41;
+            CID_ACMD41: err_code_for = ERR_ACMD41;
+            CID_CMD58:  err_code_for = ERR_CMD58;
+            CID_CMD16:  err_code_for = ERR_CMD16;
+            CID_CMD17:  err_code_for = ERR_CMD17;
+            default:    err_code_for = ERR_CMD0;
         endcase
     endfunction
 
@@ -231,50 +236,50 @@ module sd_controller #(
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
-            state     <= ST_POWERUP;
+            state_q     <= SdPowerUp;
             cs_n      <= 1'b1;
-            div_reg   <= DIV_INIT;
+            divider_q   <= DIVIDER_INIT;
             spi_start <= 1'b0;
             spi_tx    <= 8'hFF;
-            cmd_sh    <= CMD0_FRAME;
-            resp_sh   <= 32'h0;
+            cmd_shift_q    <= CMD0_FRAME;
+            resp_shift_q   <= 32'h0;
             cmd_id    <= CID_CMD0;
-            cnt       <= 16'd0;
-            retry     <= 16'd0;
-            word      <= 32'h0;
-            word_idx  <= 7'd0;
-            byte_idx  <= 2'd0;
-            busy_r    <= 1'b0;
-            blk_done  <= 1'b0;
-            blk_valid <= 1'b0;
-            blk_data  <= 32'h0;
+            byte_count       <= 16'd0;
+            acmd41_tries     <= 16'd0;
+            data_word      <= 32'h0;
+            word_index  <= 7'd0;
+            byte_index  <= 2'd0;
+            busy_q    <= 1'b0;
+            block_done  <= 1'b0;
+            block_valid <= 1'b0;
+            block_data  <= 32'h0;
             ready     <= 1'b0;
             error     <= 1'b0;
             err_code  <= ERR_NONE;
             card_type <= CT_UNKNOWN;
         end else begin
             spi_start <= 1'b0;
-            blk_done  <= 1'b0;
-            blk_valid <= 1'b0;
+            block_done  <= 1'b0;
+            block_valid <= 1'b0;
 
-            case (state)
+            case (state_q)
                 // --------------------------------------------
-                // ST_POWERUP: at least 74 clocks with cs_n high
+                // SdPowerUp: at least 74 clocks with cs_n high
                 // and mosi high, at the slow divider.
                 // --------------------------------------------
-                ST_POWERUP: begin
+                SdPowerUp: begin
                     cs_n    <= 1'b1;
-                    div_reg <= DIV_INIT;
+                    divider_q <= DIVIDER_INIT;
 
                     if (spi_done) begin
-                        if (cnt + 16'd1 == POWERUP_BYTES) begin
-                            cnt    <= 16'd0;
-                            cmd_sh <= CMD0_FRAME;
+                        if (byte_count + 16'd1 == POWERUP_BYTES) begin
+                            byte_count    <= 16'd0;
+                            cmd_shift_q <= CMD0_FRAME;
                             cmd_id <= CID_CMD0;
                             cs_n   <= 1'b0;         // select the card
-                            state  <= ST_SEND;
+                            state_q  <= SdSendCmd;
                         end else begin
-                            cnt <= cnt + 16'd1;
+                            byte_count <= byte_count + 16'd1;
                         end
                     end else if (!spi_busy) begin
                         spi_tx    <= 8'hFF;
@@ -283,40 +288,40 @@ module sd_controller #(
                 end
 
                 // --------------------------------------------
-                // ST_SEND: the six command bytes, MSB first.
+                // SdSendCmd: the six command bytes, MSB first.
                 // --------------------------------------------
-                ST_SEND: begin
+                SdSendCmd: begin
                     if (spi_done) begin
-                        if (cnt == 16'd5) begin
-                            cnt   <= 16'd0;
-                            state <= ST_R1;
+                        if (byte_count == 16'd5) begin
+                            byte_count   <= 16'd0;
+                            state_q <= SdPollR1;
                         end else begin
-                            cnt <= cnt + 16'd1;
+                            byte_count <= byte_count + 16'd1;
                         end
                     end else if (!spi_busy) begin
-                        spi_tx    <= cmd_sh[47:40];
-                        cmd_sh    <= {cmd_sh[39:0], 8'hFF};
+                        spi_tx    <= cmd_shift_q[47:40];
+                        cmd_shift_q    <= {cmd_shift_q[39:0], 8'hFF};
                         spi_start <= 1'b1;
                     end
                 end
 
                 // --------------------------------------------
-                // ST_R1: poll for R1. The card may send a few
+                // SdPollR1: poll for R1. The card may send a few
                 // 0xFF bytes first; R1 is the first byte with
                 // bit 7 clear. What happens next depends on
                 // which command this R1 answers.
                 // --------------------------------------------
-                ST_R1: begin
+                SdPollR1: begin
                     if (spi_done) begin
                         if (spi_rx[7] == 1'b0) begin
                             case (cmd_id)
                                 CID_CMD0: begin
                                     if (spi_rx != 8'h01) begin
                                         error <= 1'b1; err_code <= ERR_CMD0;
-                                        state <= ST_ERROR;
+                                        state_q <= SdFail;
                                     end else begin
-                                        cmd_sh <= CMD8_FRAME; cmd_id <= CID_CMD8;
-                                        cnt <= 16'd0; state <= ST_SEND;
+                                        cmd_shift_q <= CMD8_FRAME; cmd_id <= CID_CMD8;
+                                        byte_count <= 16'd0; state_q <= SdSendCmd;
                                     end
                                 end
 
@@ -324,27 +329,27 @@ module sd_controller #(
                                     if (spi_rx == 8'h01) begin
                                         // v2 card: read the four
                                         // bytes that follow R1.
-                                        cnt <= 16'd0; state <= ST_R7;
+                                        byte_count <= 16'd0; state_q <= SdReadR7;
                                     end else if (spi_rx[2]) begin
                                         // Illegal command, so this is
                                         // an older card: byte
                                         // addressing and no OCR.
                                         card_type <= CT_SD1;
-                                        cmd_sh <= CMD55_FRAME; cmd_id <= CID_CMD55;
-                                        cnt <= 16'd0; state <= ST_SEND;
+                                        cmd_shift_q <= CMD55_FRAME; cmd_id <= CID_CMD55;
+                                        byte_count <= 16'd0; state_q <= SdSendCmd;
                                     end else begin
                                         error <= 1'b1; err_code <= ERR_CMD8;
-                                        state <= ST_ERROR;
+                                        state_q <= SdFail;
                                     end
                                 end
 
                                 CID_CMD55: begin
                                     if (spi_rx != 8'h01) begin
                                         error <= 1'b1; err_code <= ERR_ACMD41;
-                                        state <= ST_ERROR;
+                                        state_q <= SdFail;
                                     end else begin
-                                        cmd_sh <= ACMD41_FRAME; cmd_id <= CID_ACMD41;
-                                        cnt <= 16'd0; state <= ST_SEND;
+                                        cmd_shift_q <= ACMD41_FRAME; cmd_id <= CID_ACMD41;
+                                        byte_count <= 16'd0; state_q <= SdSendCmd;
                                     end
                                 end
 
@@ -356,68 +361,68 @@ module sd_controller #(
                                         // have no OCR to read, so they
                                         // go straight to CMD16.
                                         if (card_type == CT_SD1) begin
-                                            cmd_sh <= CMD16_FRAME; cmd_id <= CID_CMD16;
+                                            cmd_shift_q <= CMD16_FRAME; cmd_id <= CID_CMD16;
                                         end else begin
-                                            cmd_sh <= CMD58_FRAME; cmd_id <= CID_CMD58;
+                                            cmd_shift_q <= CMD58_FRAME; cmd_id <= CID_CMD58;
                                         end
-                                        cnt <= 16'd0; state <= ST_SEND;
+                                        byte_count <= 16'd0; state_q <= SdSendCmd;
                                     end else if (spi_rx == 8'h01) begin
                                         // Still waking up: ask again,
                                         // but not forever.
-                                        if (retry >= RETRY_MAX) begin
+                                        if (acmd41_tries >= ACMD41_MAX_RETRIES) begin
                                             error <= 1'b1; err_code <= ERR_ACMD41;
-                                            state <= ST_ERROR;
+                                            state_q <= SdFail;
                                         end else begin
-                                            retry  <= retry + 16'd1;
-                                            cmd_sh <= CMD55_FRAME; cmd_id <= CID_CMD55;
-                                            cnt <= 16'd0; state <= ST_SEND;
+                                            acmd41_tries  <= acmd41_tries + 16'd1;
+                                            cmd_shift_q <= CMD55_FRAME; cmd_id <= CID_CMD55;
+                                            byte_count <= 16'd0; state_q <= SdSendCmd;
                                         end
                                     end else begin
                                         error <= 1'b1; err_code <= ERR_ACMD41;
-                                        state <= ST_ERROR;
+                                        state_q <= SdFail;
                                     end
                                 end
 
                                 CID_CMD58: begin
                                     if (spi_rx != 8'h00) begin
                                         error <= 1'b1; err_code <= ERR_CMD58;
-                                        state <= ST_ERROR;
+                                        state_q <= SdFail;
                                     end else begin
-                                        cnt <= 16'd0; state <= ST_R3;
+                                        byte_count <= 16'd0; state_q <= SdReadR3;
                                     end
                                 end
 
                                 CID_CMD16: begin
                                     if (spi_rx != 8'h00) begin
                                         error <= 1'b1; err_code <= ERR_CMD16;
-                                        state <= ST_ERROR;
+                                        state_q <= SdFail;
                                     end else begin
                                         ready <= 1'b1;
                                         cs_n  <= 1'b1;
-                                        state <= ST_IDLE;
+                                        state_q <= SdIdle;
                                     end
                                 end
 
                                 CID_CMD17: begin
                                     if (spi_rx != 8'h00) begin
                                         error <= 1'b1; err_code <= ERR_CMD17;
-                                        state <= ST_ERROR;
+                                        state_q <= SdFail;
                                     end else begin
-                                        cnt <= 16'd0; state <= ST_TOKEN;
+                                        byte_count <= 16'd0; state_q <= SdWaitToken;
                                     end
                                 end
 
                                 default: begin
                                     error <= 1'b1; err_code <= ERR_CMD0;
-                                    state <= ST_ERROR;
+                                    state_q <= SdFail;
                                 end
                             endcase
-                        end else if (cnt >= POLL_MAX) begin
+                        end else if (byte_count >= R1_POLL_BYTES) begin
                             // No R1 at all: the card is not talking.
-                            error <= 1'b1; err_code <= err_for(cmd_id);
-                            state <= ST_ERROR;
+                            error <= 1'b1; err_code <= err_code_for(cmd_id);
+                            state_q <= SdFail;
                         end else begin
-                            cnt       <= cnt + 16'd1;
+                            byte_count       <= byte_count + 16'd1;
                             spi_tx    <= 8'hFF;
                             spi_start <= 1'b1;
                         end
@@ -427,24 +432,24 @@ module sd_controller #(
                     end
                 end
                 // --------------------------------------------
-                // ST_R7: CMD8's four extra bytes. The last one is
+                // SdReadR7: CMD8's four extra bytes. The last one is
                 // the check pattern coming back, and that echo is
                 // what proves the card understood the command.
                 // --------------------------------------------
-                ST_R7: begin
+                SdReadR7: begin
                     if (spi_done) begin
-                        resp_sh <= resp_next;
-                        if (cnt == 16'd3) begin
-                            cnt <= 16'd0;
+                        resp_shift_q <= resp_next;
+                        if (byte_count == 16'd3) begin
+                            byte_count <= 16'd0;
                             if (resp_next[7:0] == 8'hAA) begin
-                                cmd_sh <= CMD55_FRAME; cmd_id <= CID_CMD55;
-                                state <= ST_SEND;
+                                cmd_shift_q <= CMD55_FRAME; cmd_id <= CID_CMD55;
+                                state_q <= SdSendCmd;
                             end else begin
                                 error <= 1'b1; err_code <= ERR_CMD8;
-                                state <= ST_ERROR;
+                                state_q <= SdFail;
                             end
                         end else begin
-                            cnt       <= cnt + 16'd1;
+                            byte_count       <= byte_count + 16'd1;
                             spi_tx    <= 8'hFF;
                             spi_start <= 1'b1;
                         end
@@ -455,20 +460,20 @@ module sd_controller #(
                 end
 
                 // --------------------------------------------
-                // ST_R3: CMD58's four OCR bytes. Bit 30 (CCS) is
+                // SdReadR3: CMD58's four OCR bytes. Bit 30 (CCS) is
                 // set on SDHC cards, which is the difference
                 // between sector addressing and byte addressing.
                 // --------------------------------------------
-                ST_R3: begin
+                SdReadR3: begin
                     if (spi_done) begin
-                        resp_sh <= resp_next;
-                        if (cnt == 16'd3) begin
-                            cnt <= 16'd0;
+                        resp_shift_q <= resp_next;
+                        if (byte_count == 16'd3) begin
+                            byte_count <= 16'd0;
                             card_type <= resp_next[30] ? CT_SDHC : CT_SD2;
-                            cmd_sh <= CMD16_FRAME; cmd_id <= CID_CMD16;
-                            state <= ST_SEND;
+                            cmd_shift_q <= CMD16_FRAME; cmd_id <= CID_CMD16;
+                            state_q <= SdSendCmd;
                         end else begin
-                            cnt       <= cnt + 16'd1;
+                            byte_count       <= byte_count + 16'd1;
                             spi_tx    <= 8'hFF;
                             spi_start <= 1'b1;
                         end
@@ -479,22 +484,22 @@ module sd_controller #(
                 end
 
                 // --------------------------------------------
-                // ST_TOKEN: the card answers 0xFF while it works,
+                // SdWaitToken: the card answers 0xFF while it works,
                 // then 0xFE. Bounded, so a card that never answers
                 // fails instead of hanging the SoC.
                 // --------------------------------------------
-                ST_TOKEN: begin
+                SdWaitToken: begin
                     if (spi_done) begin
                         if (spi_rx == 8'hFE) begin
-                            cnt      <= 16'd0;
-                            word_idx <= 7'd0;
-                            byte_idx <= 2'd0;
-                            state    <= ST_DATA;
-                        end else if (cnt >= TOKEN_MAX) begin
+                            byte_count      <= 16'd0;
+                            word_index <= 7'd0;
+                            byte_index <= 2'd0;
+                            state_q    <= SdReadData;
+                        end else if (byte_count >= TOKEN_TIMEOUT_BYTES) begin
                             error <= 1'b1; err_code <= ERR_TOKEN;
-                            state <= ST_ERROR;
+                            state_q <= SdFail;
                         end else begin
-                            cnt       <= cnt + 16'd1;
+                            byte_count       <= byte_count + 16'd1;
                             spi_tx    <= 8'hFF;
                             spi_start <= 1'b1;
                         end
@@ -505,26 +510,26 @@ module sd_controller #(
                 end
 
                 // --------------------------------------------
-                // ST_DATA: 512 bytes = 128 bus words. The card sends
+                // SdReadData: 512 bytes = 128 bus words. The card sends
                 // the most significant byte of a word first, and the
                 // word is assembled little endian (first byte =
                 // least significant) to match the SoC bus.
                 // --------------------------------------------
-                ST_DATA: begin
+                SdReadData: begin
                     if (spi_done) begin
-                        word <= {spi_rx, word[31:8]};
-                        if (byte_idx == 2'd3) begin
-                            blk_data  <= {spi_rx, word[31:8]};
-                            blk_valid <= 1'b1;
-                            byte_idx  <= 2'd0;
-                            if (word_idx == 7'd127) begin
-                                cnt   <= 16'd0;
-                                state <= ST_CRC;
+                        data_word <= {spi_rx, data_word[31:8]};
+                        if (byte_index == 2'd3) begin
+                            block_data  <= {spi_rx, data_word[31:8]};
+                            block_valid <= 1'b1;
+                            byte_index  <= 2'd0;
+                            if (word_index == 7'd127) begin
+                                byte_count   <= 16'd0;
+                                state_q <= SdReadCrc;
                             end else begin
-                                word_idx <= word_idx + 7'd1;
+                                word_index <= word_index + 7'd1;
                             end
                         end else begin
-                            byte_idx <= byte_idx + 2'd1;
+                            byte_index <= byte_index + 2'd1;
                         end
                     end else if (!spi_busy) begin
                         spi_tx    <= 8'hFF;
@@ -533,18 +538,18 @@ module sd_controller #(
                 end
 
                 // --------------------------------------------
-                // ST_CRC: the two CRC16 bytes, clocked out and
+                // SdReadCrc: the two CRC16 bytes, clocked out and
                 // ignored. The SPI CRC is optional and a card that
                 // has been fine for 512 bytes is not worth failing
                 // over at the last two.
                 // --------------------------------------------
-                ST_CRC: begin
+                SdReadCrc: begin
                     if (spi_done) begin
-                        if (cnt == 16'd1) begin
-                            cnt   <= 16'd0;
-                            state <= ST_TAIL;
+                        if (byte_count == 16'd1) begin
+                            byte_count   <= 16'd0;
+                            state_q <= SdDeselect;
                         end else begin
-                            cnt <= cnt + 16'd1;
+                            byte_count <= byte_count + 16'd1;
                         end
                     end else if (!spi_busy) begin
                         spi_tx    <= 8'hFF;
@@ -553,15 +558,15 @@ module sd_controller #(
                 end
 
                 // --------------------------------------------
-                // ST_TAIL: cs_n high and one idle byte, so the card
+                // SdDeselect: cs_n high and one idle byte, so the card
                 // is released cleanly before the next command.
                 // --------------------------------------------
-                ST_TAIL: begin
+                SdDeselect: begin
                     cs_n <= 1'b1;
                     if (spi_done) begin
-                        blk_done <= 1'b1;
-                        busy_r   <= 1'b0;
-                        state    <= ST_IDLE;
+                        block_done <= 1'b1;
+                        busy_q   <= 1'b0;
+                        state_q    <= SdIdle;
                     end else if (!spi_busy) begin
                         spi_tx    <= 8'hFF;
                         spi_start <= 1'b1;
@@ -569,38 +574,38 @@ module sd_controller #(
                 end
 
                 // --------------------------------------------
-                // ST_IDLE: initialised and waiting for work.
+                // SdIdle: initialised and waiting for work.
                 // --------------------------------------------
-                ST_IDLE: begin
+                SdIdle: begin
                     cs_n <= 1'b1;
 
-                    if (blk_req && !error) begin
+                    if (block_req && !error) begin
                         // SDHC takes a sector number; older cards
                         // take a byte address, so the LBA is shifted
                         // left by 9 to make it one.
-                        cmd_sh <= {8'h51,
-                                   (card_type == CT_SDHC) ? blk_addr
-                                                          : (blk_addr << 9),
+                        cmd_shift_q <= {8'h51,
+                                   (card_type == CT_SDHC) ? block_addr
+                                                          : (block_addr << 9),
                                    8'hFF};
                         cmd_id  <= CID_CMD17;
-                        cnt     <= 16'd0;
-                        div_reg <= DIV_DATA;
+                        byte_count     <= 16'd0;
+                        divider_q <= DIVIDER_DATA;
                         cs_n    <= 1'b0;
-                        busy_r  <= 1'b1;
-                        state   <= ST_SEND;
+                        busy_q  <= 1'b1;
+                        state_q   <= SdSendCmd;
                     end
                 end
 
                 // --------------------------------------------
-                // ST_ERROR: sticky. The card is left deselected and
+                // SdFail: sticky. The card is left deselected and
                 // no further request is served until reset.
                 // --------------------------------------------
-                ST_ERROR: begin
+                SdFail: begin
                     cs_n  <= 1'b1;
-                    busy_r <= 1'b0;
+                    busy_q <= 1'b0;
                 end
 
-                default: state <= ST_ERROR;
+                default: state_q <= SdFail;
             endcase
         end
     end

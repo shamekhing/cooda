@@ -25,7 +25,7 @@ module sd_image_tb;
 
     localparam logic [31:0] DDR3_BASE = 32'h0800_0000;
     localparam int          MAX_BLOCKS = 64;
-    localparam string       IMG = "data/mnist/sd_image.img";
+    localparam string       IMAGE_FILE = "data/mnist/sd_image.img";
 
     // ---------------- clock / reset ----------------
     logic clk = 1'b0;
@@ -35,22 +35,22 @@ module sd_image_tb;
 
     // ---------------- card side ----------------
     logic        cs_n, sck, mosi, miso;
-    logic        blk_req;
-    logic [31:0] blk_addr;
-    logic        blk_busy, blk_done, blk_valid;
-    logic [31:0] blk_data;
+    logic        block_req;
+    logic [31:0] block_addr;
+    logic        block_busy, block_done, block_valid;
+    logic [31:0] block_data;
     logic        sd_ready, sd_error;
     logic [3:0]  sd_err_code;
     logic [1:0]  card_type;
     logic [4:0]  ctrl_state;
 
     sd_controller #(
-        .DIV_INIT      (16'd4),
-        .DIV_DATA      (16'd1),
+        .DIVIDER_INIT      (16'd4),
+        .DIVIDER_DATA      (16'd1),
         .POWERUP_BYTES (10),
-        .POLL_MAX      (6),
-        .RETRY_MAX     (4),
-        .TOKEN_MAX     (8)
+        .R1_POLL_BYTES      (6),
+        .ACMD41_MAX_RETRIES     (4),
+        .TOKEN_TIMEOUT_BYTES     (8)
     ) u_ctrl (
         .clk       (clk),
         .rst       (rst),
@@ -58,12 +58,12 @@ module sd_image_tb;
         .sck       (sck),
         .mosi      (mosi),
         .miso      (miso),
-        .blk_req   (blk_req),
-        .blk_addr  (blk_addr),
-        .blk_busy  (blk_busy),
-        .blk_done  (blk_done),
-        .blk_data  (blk_data),
-        .blk_valid (blk_valid),
+        .block_req   (block_req),
+        .block_addr  (block_addr),
+        .block_busy  (block_busy),
+        .block_done  (block_done),
+        .block_data  (block_data),
+        .block_valid (block_valid),
         .ready     (sd_ready),
         .error     (sd_error),
         .err_code  (sd_err_code),
@@ -71,9 +71,9 @@ module sd_image_tb;
         .state_dbg (ctrl_state)
     );
 
-    logic [7:0]  ncr_ff      = 8'd3;
-    logic [7:0]  token_delay = 8'd5;
-    logic [15:0] ready_after = 16'd1;
+    logic [7:0]  r1_idle_bytes      = 8'd3;
+    logic [7:0]  token_idle_bytes = 8'd5;
+    logic [15:0] ready_after_tries = 16'd1;
     logic [15:0] card_cmd_count;
     logic [5:0]  card_last_op;
 
@@ -83,9 +83,9 @@ module sd_image_tb;
         .sck               (sck),
         .mosi              (mosi),
         .miso              (miso),
-        .ncr_ff            (ncr_ff),
-        .token_delay       (token_delay),
-        .ready_after       (ready_after),
+        .r1_idle_bytes            (r1_idle_bytes),
+        .token_idle_bytes       (token_idle_bytes),
+        .ready_after_tries       (ready_after_tries),
         .fault_silent      (1'b0),
         .fault_bad_echo    (1'b0),
         .fault_never_ready (1'b0),
@@ -94,7 +94,7 @@ module sd_image_tb;
         .fault_sdsc        (1'b0),
         .fault_v1          (1'b0),
         .cmd_count         (card_cmd_count),
-        .last_op           (card_last_op)
+        .last_opcode           (card_last_op)
     );
 
 
@@ -111,11 +111,11 @@ module sd_image_tb;
     ) u_loader (
         .clk           (clk),
         .rst           (rst),
-        .blk_req       (blk_req),
-        .blk_addr      (blk_addr),
-        .blk_done      (blk_done),
-        .blk_data      (blk_data),
-        .blk_valid     (blk_valid),
+        .block_req       (block_req),
+        .block_addr      (block_addr),
+        .block_done      (block_done),
+        .block_data      (block_data),
+        .block_valid     (block_valid),
         .sd_ready      (sd_ready),
         .sd_error      (sd_error),
         .bus_req       (loader_req),
@@ -131,7 +131,7 @@ module sd_image_tb;
     // ---------------- bus target ----------------
     // One transaction at a time, answered on the cycle after the
     // request. The bus contract itself is sd_loader_tb's job.
-    logic [31:0] mem [0:16383];
+    logic [31:0] target_memory [0:16383];
     logic [31:0] target_writes = 32'd0;
     logic        accept;
 
@@ -143,7 +143,7 @@ module sd_image_tb;
         end else begin
             loader_rsp.ready <= accept;
             if (accept && loader_req.op == soc_pkg::BusWrite) begin
-                mem[(loader_req.addr - DDR3_BASE) >> 2] <= loader_req.wdata;
+                target_memory[(loader_req.addr - DDR3_BASE) >> 2] <= loader_req.wdata;
                 target_writes <= target_writes + 32'd1;
             end
         end
@@ -153,10 +153,10 @@ module sd_image_tb;
     // THE IMAGE
     // ========================================================
 
-    logic [7:0]  img [0:MAX_BLOCKS*512-1];
-    int          img_blocks;
-    logic [31:0] img_magic, img_dest, img_bytes;
-    int          fd, got;
+    logic [7:0]  image_data [0:MAX_BLOCKS*512-1];
+    int          image_blocks;
+    logic [31:0] image_magic, image_dest, image_payload_bytes;
+    int          image_fd, bytes_read;
 
     int errors = 0;
     int checks = 0;
@@ -170,49 +170,49 @@ module sd_image_tb;
 
         // Read the image the host packer wrote. Without it there is
         // nothing to test, and that is a skip rather than a failure.
-        fd = $fopen(IMG, "rb");
-        if (fd == 0) begin
-            $display("SKIP: sd_image (%s not found; run tools/mnist_pack.py)", IMG);
+        image_fd = $fopen(IMAGE_FILE, "rb");
+        if (image_fd == 0) begin
+            $display("SKIP: sd_image (%s not found; run tools/mnist_pack.py)", IMAGE_FILE);
             $finish;
         end
 
-        got = $fread(img, fd);
-        $fclose(fd);
+        bytes_read = $fread(image_data, image_fd);
+        $fclose(image_fd);
 
-        if (got < 512) begin
-            $fatal(1, "FAIL: sd_image %s is only %0d bytes", IMG, got);
+        if (bytes_read < 512) begin
+            $fatal(1, "FAIL: sd_image %s is only %0d bytes", IMAGE_FILE, bytes_read);
         end
 
         // Header words are little endian: first byte is the low byte.
-        img_magic = {img[3],  img[2],  img[1],  img[0]};
-        img_blocks = {img[7],  img[6],  img[5],  img[4]};
-        img_dest   = {img[11], img[10], img[9],  img[8]};
-        img_bytes  = {img[15], img[14], img[13], img[12]};
+        image_magic = {image_data[3],  image_data[2],  image_data[1],  image_data[0]};
+        image_blocks = {image_data[7],  image_data[6],  image_data[5],  image_data[4]};
+        image_dest   = {image_data[11], image_data[10], image_data[9],  image_data[8]};
+        image_payload_bytes  = {image_data[15], image_data[14], image_data[13], image_data[12]};
 
         $display("image: %s, %0d bytes read, magic %08h, %0d payload blocks, %0d bytes, dest %08h",
-                 IMG, got, img_magic, img_blocks, img_bytes, img_dest);
+                 IMAGE_FILE, bytes_read, image_magic, image_blocks, image_payload_bytes, image_dest);
 
         checks++;
-        if (img_magic !== 32'h434F_4F44) begin
+        if (image_magic !== 32'h434F_4F44) begin
             errors++;
-            $display("FAIL: image magic is %08h, expected 434f4f44", img_magic);
+            $display("FAIL: image magic is %08h, expected_byte 434f4f44", image_magic);
         end
         checks++;
-        if (img_blocks < 1 || img_blocks >= MAX_BLOCKS) begin
+        if (image_blocks < 1 || image_blocks >= MAX_BLOCKS) begin
             errors++;
             $display("FAIL: image claims %0d payload blocks, model holds %0d",
-                     img_blocks, MAX_BLOCKS);
+                     image_blocks, MAX_BLOCKS);
         end
         checks++;
-        if (got != 512 * (1 + img_blocks)) begin
+        if (bytes_read != 512 * (1 + image_blocks)) begin
             errors++;
             $display("FAIL: file is %0d bytes, header says %0d",
-                     got, 512 * (1 + img_blocks));
+                     bytes_read, 512 * (1 + image_blocks));
         end
 
         // Hand the whole image to the card, header block included.
-        for (int i = 0; i < 512 * (1 + img_blocks); i++)
-            u_card.blk[i] = img[i];
+        for (int i = 0; i < 512 * (1 + image_blocks); i++)
+            u_card.block_store[i] = image_data[i];
 
         repeat (5) @(negedge clk);
         rst = 1'b1;
@@ -220,42 +220,42 @@ module sd_image_tb;
         rst = 1'b0;
 
         for (int i = 0; i < 16384; i++)
-            mem[i] = 32'hDEAD_BEEF;
+            target_memory[i] = 32'hDEAD_BEEF;
         target_writes = 32'd0;
 
         // Wait for the load.
-        got = 0;
-        while (!load_done && !load_error && got < 8_000_000) begin
+        bytes_read = 0;
+        while (!load_done && !load_error && bytes_read < 8_000_000) begin
             @(negedge clk);
-            got++;
+            bytes_read++;
         end
 
         checks++;
         if (!load_done) begin
             errors++;
             $display("FAIL: the load did not finish (error=%0b code=%0d after %0d cycles)",
-                     load_error, load_err_code, got);
+                     load_error, load_err_code, bytes_read);
         end
 
         checks++;
-        if (blocks_loaded !== img_blocks) begin
+        if (blocks_loaded !== image_blocks) begin
             errors++;
             $display("FAIL: %0d blocks loaded, the image has %0d",
-                     blocks_loaded, img_blocks);
+                     blocks_loaded, image_blocks);
         end
 
         checks++;
-        if (bytes_loaded !== (img_blocks * 512)) begin
+        if (bytes_loaded !== (image_blocks * 512)) begin
             errors++;
-            $display("FAIL: %0d bytes loaded, expected %0d",
-                     bytes_loaded, img_blocks * 512);
+            $display("FAIL: %0d bytes loaded, expected_byte %0d",
+                     bytes_loaded, image_blocks * 512);
         end
 
         checks++;
-        if (target_writes !== (img_blocks * 128)) begin
+        if (target_writes !== (image_blocks * 128)) begin
             errors++;
-            $display("FAIL: %0d bus writes, expected %0d",
-                     target_writes, img_blocks * 128);
+            $display("FAIL: %0d bus writes, expected_byte %0d",
+                     target_writes, image_blocks * 128);
         end
 
         // Every payload byte of the file, at the destination the file
@@ -264,30 +264,30 @@ module sd_image_tb;
         // loader moves whole blocks, so the block padding in the file is
         // compared too.
         checks++;
-        for (int j = 0; j < img_blocks * 512; j++) begin
+        for (int j = 0; j < image_blocks * 512; j++) begin
             int          addr_byte;
-            int          word_idx;
-            logic [31:0] lane;
-            logic [7:0]  expected;
+            int          word_index;
+            logic [31:0] byte_lane;
+            logic [7:0]  expected_byte;
 
-            addr_byte = img_dest + j;
-            word_idx  = addr_byte >> 2;
-            lane      = addr_byte & 3;
-            expected  = img[512 + j];
+            addr_byte = image_dest + j;
+            word_index  = addr_byte >> 2;
+            byte_lane      = addr_byte & 3;
+            expected_byte  = image_data[512 + j];
 
-            if (mem[word_idx][8*lane +: 8] !== expected) begin
+            if (target_memory[word_index][8*byte_lane +: 8] !== expected_byte) begin
                 errors++;
                 if (errors < 8)
                     $display("FAIL: byte %0d of the payload: memory has %02h, image has %02h",
-                             j, mem[word_idx][8*lane +: 8], expected);
+                             j, target_memory[word_index][8*byte_lane +: 8], expected_byte);
             end
         end
 
         // Nothing past the blocks the header asked for may be written.
         checks++;
-        for (int i = (img_dest >> 2) + img_blocks * 128;
-             i < (img_dest >> 2) + img_blocks * 128 + 4; i++) begin
-            if (mem[i] !== 32'hDEAD_BEEF) begin
+        for (int i = (image_dest >> 2) + image_blocks * 128;
+             i < (image_dest >> 2) + image_blocks * 128 + 4; i++) begin
+            if (target_memory[i] !== 32'hDEAD_BEEF) begin
                 errors++;
                 $display("FAIL: word %0d past the payload was written", i);
             end
@@ -295,7 +295,7 @@ module sd_image_tb;
 
         if (errors == 0)
             $display("PASS: sd_image %0d checks, %0d payload bytes verified",
-                     checks, img_blocks * 512);
+                     checks, image_blocks * 512);
         else
             $fatal(1, "FAIL: sd_image %0d checks, %0d errors", checks, errors);
         $finish;

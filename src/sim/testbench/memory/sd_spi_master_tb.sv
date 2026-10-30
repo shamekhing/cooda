@@ -62,45 +62,45 @@ module sd_spi_master_tb;
     // BEHAVIOURAL SPI SLAVE (the card's side of the wire)
     // ========================================================
     // mosi is sampled on the rising edge of sck and miso changes on
-    // the falling edge, which is what a real card does. sl_load
+    // the falling edge, which is what a real card does. slave_load
     // presents the first bit while sck is idle - the moment a card
     // has had its chip select asserted and has a byte queued.
     // --------------------------------------------------------
 
-    logic [7:0] sl_tx      = 8'h00;     // byte the slave returns
-    logic [7:0] sl_rx;
-    logic [7:0] sl_rx_hold;             // ... captured, after 8 bits
-    logic       sl_got     = 1'b0;      // a whole byte arrived
-    logic       sl_load    = 1'b0;      // pulse: present sl_tx[7]
-    logic       sl_miso    = 1'b1;
-    logic [2:0] sl_rx_bit;
-    logic [2:0] sl_tx_bit;
+    logic [7:0] slave_reply      = 8'h00;     // byte the slave returns
+    logic [7:0] slave_capture;
+    logic [7:0] slave_capture_byte;             // ... captured, after 8 bits
+    logic       slave_byte_seen     = 1'b0;      // a whole byte arrived
+    logic       slave_load    = 1'b0;      // pulse: present slave_reply[7]
+    logic       slave_miso    = 1'b1;
+    logic [2:0] slave_rx_index;
+    logic [2:0] slave_tx_index;
 
-    assign miso = sl_miso;
+    assign miso = slave_miso;
 
-    always @(sck or posedge sl_load) begin
-        if (sl_load) begin
-            sl_miso   <= sl_tx[7];
-            sl_tx_bit <= 3'd0;
-            sl_rx     <= 8'h00;
-            sl_rx_bit <= 3'd0;
-            sl_got    <= 1'b0;
+    always @(sck or posedge slave_load) begin
+        if (slave_load) begin
+            slave_miso   <= slave_reply[7];
+            slave_tx_index <= 3'd0;
+            slave_capture     <= 8'h00;
+            slave_rx_index <= 3'd0;
+            slave_byte_seen    <= 1'b0;
         end else if (sck) begin
-            sl_rx <= {sl_rx[6:0], mosi};
-            if (sl_rx_bit == 3'd7) begin
-                sl_rx_hold <= {sl_rx[6:0], mosi};
-                sl_got     <= 1'b1;
+            slave_capture <= {slave_capture[6:0], mosi};
+            if (slave_rx_index == 3'd7) begin
+                slave_capture_byte <= {slave_capture[6:0], mosi};
+                slave_byte_seen     <= 1'b1;
             end
-            sl_rx_bit <= sl_rx_bit + 3'd1;
+            slave_rx_index <= slave_rx_index + 3'd1;
         end else begin
-            sl_miso   <= (sl_tx_bit == 3'd7) ? 1'b1 : sl_tx[6 - sl_tx_bit];
-            sl_tx_bit <= sl_tx_bit + 3'd1;
+            slave_miso   <= (slave_tx_index == 3'd7) ? 1'b1 : slave_reply[6 - slave_tx_index];
+            slave_tx_index <= slave_tx_index + 3'd1;
         end
     end
 
     // Every rising edge on the wire, counted for the checks below.
-    int n_rises = 0;
-    always @(posedge sck) n_rises++;
+    int rise_count = 0;
+    always @(posedge sck) rise_count++;
 
 
     // ========================================================
@@ -109,25 +109,25 @@ module sd_spi_master_tb;
     // Issues one byte and checks every property of it.
     // --------------------------------------------------------
 
-    task automatic xfer(input logic [7:0]  send,
+    task automatic check_byte(input logic [7:0]  send,
                         input logic [7:0]  reply,
                         input logic [15:0] div,
                         input string       name);
-        realtime t0, t1;
-        real     expected;
-        int      rises0;
+        realtime first_rise_time, last_rise_time;
+        real     expected_ns;
+        int      rises_before;
 
         divider = div;
         tx      = send;
-        sl_tx   = reply;
-        rises0  = n_rises;
-        sl_load = 1'b1;
+        slave_reply   = reply;
+        rises_before  = rise_count;
+        slave_load = 1'b1;
 
         @(negedge clk);
         start = 1'b1;
         @(negedge clk);
         start = 1'b0;
-        sl_load = 1'b0;
+        slave_load = 1'b0;
 
         checks++;
         if (!busy) begin
@@ -136,47 +136,47 @@ module sd_spi_master_tb;
         end
 
         // Eight rising edges, then the done pulse.
-        @(posedge sck); t0 = $realtime;
+        @(posedge sck); first_rise_time = $realtime;
         for (int i = 1; i < 8; i++) @(posedge sck);
-        t1 = $realtime;
+        last_rise_time = $realtime;
 
         while (!done) @(negedge clk);
 
         checks++;
         if (rx !== reply) begin
             errors++;
-            $display("FAIL %s rx: got %02h expected %02h", name, rx, reply);
+            $display("FAIL %s rx: got %02h expected_ns %02h", name, rx, reply);
         end
 
         checks++;
-        if (sl_rx_hold !== send) begin
+        if (slave_capture_byte !== send) begin
             errors++;
-            $display("FAIL %s mosi: slave received %02h expected %02h",
-                     name, sl_rx_hold, send);
+            $display("FAIL %s mosi: slave received %02h expected_ns %02h",
+                     name, slave_capture_byte, send);
         end
 
         checks++;
-        if (!sl_got) begin
+        if (!slave_byte_seen) begin
             errors++;
             $display("FAIL %s: slave never saw a whole byte", name);
         end
 
         checks++;
-        if (n_rises - rises0 != 8) begin
+        if (rise_count - rises_before != 8) begin
             errors++;
-            $display("FAIL %s: %0d sck rising edges, expected 8",
-                     name, n_rises - rises0);
+            $display("FAIL %s: %0d sck rising edges, expected_ns 8",
+                     name, rise_count - rises_before);
         end
 
         // Seven bit periods between the first and the last rising
         // edge: 14 sck half periods of divider clk cycles each. A
         // zero divider must behave like 1 (see sd_spi_master).
-        expected = 14.0 * real'(div == 0 ? 16'd1 : div) * CLK_NS;
+        expected_ns = 14.0 * real'(div == 0 ? 16'd1 : div) * CLK_NS;
         checks++;
-        if ((t1 - t0) < expected - 3.0 || (t1 - t0) > expected + 3.0) begin
+        if ((last_rise_time - first_rise_time) < expected_ns - 3.0 || (last_rise_time - first_rise_time) > expected_ns + 3.0) begin
             errors++;
-            $display("FAIL %s period: %0f ns for 7 bits, expected %0f ns (divider %0d)",
-                     name, t1 - t0, expected, div);
+            $display("FAIL %s period: %0f ns for 7 bits, expected_ns %0f ns (divider %0d)",
+                     name, last_rise_time - first_rise_time, expected_ns, div);
         end
 
         // sck back to idle low, and not busy any more.
@@ -199,7 +199,7 @@ module sd_spi_master_tb;
 
     logic [31:0] lfsr   = 32'hC0DA_1234;
     logic [7:0]  rnd_s, rnd_r;
-    int          rises0;
+    int          rises_before;
 
     // Deterministic bytes, so a failure can be reproduced exactly.
     function automatic logic [7:0] next_byte();
@@ -227,58 +227,58 @@ module sd_spi_master_tb;
         // 2. one byte at each speed: the data-phase divider, the
         //    card's wake-up divider, a zero divider that must be
         //    clamped to 1, and a middle divider.
-        xfer(8'hA5, 8'h3C, 16'd1,  "13.5 MHz");
-        xfer(8'h00, 8'hFF, 16'd34, "397 kHz");
-        xfer(8'hFF, 8'h00, 16'd0,  "clamped divider");
-        xfer(8'h5A, 8'h81, 16'd2,  "divider 2");
+        check_byte(8'hA5, 8'h3C, 16'd1,  "13.5 MHz");
+        check_byte(8'h00, 8'hFF, 16'd34, "397 kHz");
+        check_byte(8'hFF, 8'h00, 16'd0,  "clamped divider");
+        check_byte(8'h5A, 8'h81, 16'd2,  "divider 2");
 
         // 3. back-to-back bytes with no gap between them.
         for (int i = 0; i < 8; i++) begin
-            xfer(8'(8'h30 + i), 8'(8'hC0 - i), 16'd3, "back-to-back");
+            check_byte(8'(8'h30 + i), 8'(8'hC0 - i), 16'd3, "back-to-back");
         end
 
         // 4. pseudo-random bytes in both directions.
         for (int i = 0; i < 64; i++) begin
             rnd_s = next_byte();
             rnd_r = next_byte();
-            xfer(rnd_s, rnd_r, 16'(1 + (i % 8)), "random");
+            check_byte(rnd_s, rnd_r, 16'(1 + (i % 8)), "random");
         end
 
         // 5. start while busy is ignored: a stray pulse in the
         //    middle of a byte must not disturb the byte stream.
-        rises0  = n_rises;
+        rises_before  = rise_count;
         divider = 16'd4;
         tx      = 8'h3C;
-        sl_tx   = 8'hC3;
-        sl_load = 1'b1;
+        slave_reply   = 8'hC3;
+        slave_load = 1'b1;
         @(negedge clk);
         start = 1'b1;
         @(negedge clk);
         start = 1'b0;
-        sl_load = 1'b0;
+        slave_load = 1'b0;
         repeat (6) @(negedge clk);
         start = 1'b1;                       // stray pulse, mid-byte
         @(negedge clk);
         start = 1'b0;
         while (!done) @(negedge clk);
         checks++;
-        if (rx !== 8'hC3 || sl_rx_hold !== 8'h3C || (n_rises - rises0) != 8) begin
+        if (rx !== 8'hC3 || slave_capture_byte !== 8'h3C || (rise_count - rises_before) != 8) begin
             errors++;
             $display("FAIL start while busy: rx=%02h slave=%02h edges=%0d",
-                     rx, sl_rx_hold, n_rises - rises0);
+                     rx, slave_capture_byte, rise_count - rises_before);
         end
 
         // 6. reset in the middle of a transfer: sck must come back
         //    to idle low with no done pulse left behind.
         divider = 16'd4;
         tx      = 8'hFF;
-        sl_tx   = 8'hFF;
-        sl_load = 1'b1;
+        slave_reply   = 8'hFF;
+        slave_load = 1'b1;
         @(negedge clk);
         start = 1'b1;
         @(negedge clk);
         start = 1'b0;
-        sl_load = 1'b0;
+        slave_load = 1'b0;
         repeat (3) @(posedge sck);
         rst = 1'b1;
         repeat (4) @(negedge clk);
@@ -292,7 +292,7 @@ module sd_spi_master_tb;
         end
 
         // 7. and the engine still works after that reset.
-        xfer(8'h96, 8'h69, 16'd2, "after reset");
+        check_byte(8'h96, 8'h69, 16'd2, "after reset");
 
         if (errors == 0)
             $display("PASS: sd_spi_master %0d checks", checks);

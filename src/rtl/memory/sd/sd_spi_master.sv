@@ -25,11 +25,12 @@
 //
 //     sck = clk / (2 * divider)
 //
-//   It is a port rather than a parameter because the card needs two
-//   speeds: at most 400 kHz while it is waking up, and up to 25 MHz
-//   once it is in SPI mode. At 27 MHz, divider 34 is 397 kHz and
-//   divider 1 is 13.5 MHz, the fastest this clock can produce. The
-//   protocol layer rewrites divider between phases.
+//   Divider 34 with clk=27 MHz is about 397 kHz for initialization.
+//   Divider 1 is only correct when clk is at or below 50 MHz, since
+//   SPI mode cards are limited to 25 MHz. For a faster source clock,
+//   choose a larger divider; the protocol layer can change it between
+//   phases. The formula rounds down, so callers should select a divider
+//   that keeps SCK within the card's maximum.
 //
 // CHIP SELECT
 //   Not here. cs_n is a protocol concern - it has to stay low for a
@@ -47,13 +48,13 @@
 // ============================================================
 
 module sd_spi_master #(
-    parameter int DIV_W = 16
+    parameter int DIVIDER_WIDTH = 16
 ) (
     input  logic             clk,
     input  logic             rst,
     input  logic             start,
     input  logic [7:0]       tx,
-    input  logic [DIV_W-1:0] divider,
+    input  logic [DIVIDER_WIDTH-1:0] divider,
     output logic             busy,
     output logic             done,
     output logic [7:0]       rx,
@@ -63,39 +64,39 @@ module sd_spi_master #(
 );
 
     typedef enum logic [1:0] {
-        IDLE = 2'd0,
-        RISE = 2'd1,        // driving sck high: sample miso
-        FALL = 2'd2         // driving sck low: present the next mosi bit
-    } state_e;
+        SpiIdle  = 2'd0,
+        SpiSample = 2'd1,        // driving sck high: sample miso
+        SpiShift  = 2'd2         // driving sck low: present the next mosi bit
+    } spi_master_state_e;
 
-    state_e           state;
-    logic [DIV_W-1:0] div_cnt;
-    logic [2:0]       bit_idx;
-    logic [7:0]       sh_out;
-    logic [7:0]       sh_in;
+    spi_master_state_e state_q;
+    logic [DIVIDER_WIDTH-1:0] half_period_count;
+    logic [2:0]       bit_index;
+    logic [7:0]       tx_shift_q;
+    logic [7:0]       rx_shift_q;
 
     // A divider of zero would mean "toggle every cycle with no half
-    // period at all", so clamp it to 1 (13.5 MHz at 27 MHz).
-    logic [DIV_W-1:0] div_eff;
+    // period at all", so clamp it to 1.
+    logic [DIVIDER_WIDTH-1:0] divider_eff;
 
     always_comb begin
-        div_eff = divider;
+        divider_eff = divider;
         if (divider == 0)
-            div_eff = 1;
+            divider_eff = 1;
     end
 
     // busy covers the start cycle itself: a caller that launches a
     // byte and then waits for busy to drop cannot accidentally launch
     // a second one before this engine has picked the first up.
-    assign busy = (state != IDLE) || done || start;
+    assign busy = (state_q != SpiIdle) || done || start;
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
-            state   <= IDLE;
-            div_cnt <= '0;
-            bit_idx <= 3'd0;
-            sh_out  <= 8'hFF;
-            sh_in   <= 8'h00;
+            state_q   <= SpiIdle;
+            half_period_count <= '0;
+            bit_index <= 3'd0;
+            tx_shift_q  <= 8'hFF;
+            rx_shift_q   <= 8'h00;
             done    <= 1'b0;
             rx      <= 8'h00;
             sck     <= 1'b0;
@@ -103,72 +104,72 @@ module sd_spi_master #(
         end else begin
             done <= 1'b0;
 
-            case (state)
+            case (state_q)
                 // ------------------------------------------------
-                // IDLE: sck low, mosi high (the card sees an idle
+                // SpiIdle: sck low, mosi high (the card sees an idle
                 // line, which is also what the 74-clock power-up
                 // sequence needs).
                 // ------------------------------------------------
-                IDLE: begin
+                SpiIdle: begin
                     sck  <= 1'b0;
                     mosi <= 1'b1;
 
                     if (start) begin
-                        div_cnt <= '0;
-                        bit_idx <= 3'd0;
-                        sh_out  <= tx;
-                        sh_in   <= 8'h00;
+                        half_period_count <= '0;
+                        bit_index <= 3'd0;
+                        tx_shift_q  <= tx;
+                        rx_shift_q   <= 8'h00;
                         mosi    <= tx[7];       // MSB first
-                        state   <= RISE;
+                        state_q   <= SpiSample;
                     end
                 end
 
                 // ------------------------------------------------
-                // RISE: one half period with sck low, then sck goes
+                // SpiSample: one half period with sck low, then sck goes
                 // high. mosi has been stable since the previous
                 // falling edge, so the card can sample it, and this
                 // is where we sample what the card drove.
                 // ------------------------------------------------
-                RISE: begin
-                    if (div_cnt + 1 >= div_eff) begin
-                        div_cnt <= '0;
+                SpiSample: begin
+                    if (half_period_count + 1 >= divider_eff) begin
+                        half_period_count <= '0;
                         sck     <= 1'b1;
-                        sh_in   <= {sh_in[6:0], miso};
-                        state   <= FALL;
+                        rx_shift_q   <= {rx_shift_q[6:0], miso};
+                        state_q   <= SpiShift;
                     end else begin
-                        div_cnt <= div_cnt + 1;
+                        half_period_count <= half_period_count + 1;
                     end
                 end
 
                 // ------------------------------------------------
-                // FALL: one half period with sck high, then sck goes
+                // SpiShift: one half period with sck high, then sck goes
                 // low and the next bit is presented.
                 // ------------------------------------------------
-                FALL: begin
-                    if (div_cnt + 1 >= div_eff) begin
-                        div_cnt <= '0;
+                SpiShift: begin
+                    if (half_period_count + 1 >= divider_eff) begin
+                        half_period_count <= '0;
                         sck     <= 1'b0;
 
-                        if (bit_idx == 3'd7) begin
-                            // sh_in holds all 8 sampled bits: the last
+                        if (bit_index == 3'd7) begin
+                            // rx_shift_q holds all 8 sampled bits: the last
                             // one was taken on this bit's rising edge,
                             // one cycle or more ago.
-                            state <= IDLE;
+                            state_q <= SpiIdle;
                             done  <= 1'b1;
-                            rx    <= sh_in;
+                            rx    <= rx_shift_q;
                             mosi  <= 1'b1;
                         end else begin
-                            bit_idx <= bit_idx + 3'd1;
-                            sh_out  <= {sh_out[6:0], 1'b0};
-                            mosi    <= sh_out[6];
-                            state   <= RISE;
+                            bit_index <= bit_index + 3'd1;
+                            tx_shift_q  <= {tx_shift_q[6:0], 1'b0};
+                            mosi    <= tx_shift_q[6];
+                            state_q   <= SpiSample;
                         end
                     end else begin
-                        div_cnt <= div_cnt + 1;
+                        half_period_count <= half_period_count + 1;
                     end
                 end
 
-                default: state <= IDLE;
+                default: state_q <= SpiIdle;
             endcase
         end
     end

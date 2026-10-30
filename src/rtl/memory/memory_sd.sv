@@ -20,15 +20,15 @@
 // ============================================================
 
 module memory_sd #(
-    parameter int               DIV_W         = 16,
-    parameter logic [DIV_W-1:0] DIV_INIT      = 16'd34,     // 397 kHz
-    parameter logic [DIV_W-1:0] DIV_DATA      = 16'd1,      // 13.5 MHz
+    parameter int               DIVIDER_WIDTH         = 16,
+    parameter logic [DIVIDER_WIDTH-1:0] DIVIDER_INIT      = 16'd34,     // 397 kHz
+    parameter logic [DIVIDER_WIDTH-1:0] DIVIDER_DATA      = 16'd1,      // 13.5 MHz at 27 MHz
     parameter logic [31:0]      DDR3_BASE     = 32'h0800_0000,
     parameter logic [31:0]      DDR3_SIZE     = 32'h0800_0000,
     parameter int               POWERUP_BYTES = 10,
-    parameter int               POLL_MAX      = 16,
-    parameter int               RETRY_MAX     = 8000,
-    parameter int               TOKEN_MAX     = 4096,
+    parameter int               R1_POLL_BYTES      = 16,
+    parameter int               ACMD41_MAX_RETRIES     = 8000,
+    parameter int               TOKEN_TIMEOUT_BYTES     = 4096,
     parameter int               MAX_BLOCKS    = 65536
 ) (
     input  logic             clk,
@@ -57,21 +57,21 @@ module memory_sd #(
     output logic [31:0]      bytes_loaded
 );
 
-    logic        blk_req;
-    logic [31:0] blk_addr;
-    logic        blk_busy;
-    logic        blk_done;
-    logic [31:0] blk_data;
-    logic        blk_valid;
+    logic        block_req;
+    logic [31:0] block_addr;
+    logic        block_busy;
+    logic        block_done;
+    logic [31:0] block_data;
+    logic        block_valid;
 
     sd_controller #(
-        .DIV_W         (DIV_W),
-        .DIV_INIT      (DIV_INIT),
-        .DIV_DATA      (DIV_DATA),
+        .DIVIDER_WIDTH         (DIVIDER_WIDTH),
+        .DIVIDER_INIT      (DIVIDER_INIT),
+        .DIVIDER_DATA      (DIVIDER_DATA),
         .POWERUP_BYTES (POWERUP_BYTES),
-        .POLL_MAX      (POLL_MAX),
-        .RETRY_MAX     (RETRY_MAX),
-        .TOKEN_MAX     (TOKEN_MAX)
+        .R1_POLL_BYTES      (R1_POLL_BYTES),
+        .ACMD41_MAX_RETRIES     (ACMD41_MAX_RETRIES),
+        .TOKEN_TIMEOUT_BYTES     (TOKEN_TIMEOUT_BYTES)
     ) u_ctrl (
         .clk       (clk),
         .rst       (rst),
@@ -79,12 +79,12 @@ module memory_sd #(
         .sck       (sd_sck),
         .mosi      (sd_mosi),
         .miso      (sd_miso),
-        .blk_req   (blk_req),
-        .blk_addr  (blk_addr),
-        .blk_busy  (blk_busy),
-        .blk_done  (blk_done),
-        .blk_data  (blk_data),
-        .blk_valid (blk_valid),
+        .block_req   (block_req),
+        .block_addr  (block_addr),
+        .block_busy  (block_busy),
+        .block_done  (block_done),
+        .block_data  (block_data),
+        .block_valid (block_valid),
         .ready     (sd_ready),
         .error     (sd_error),
         .err_code  (sd_err_code),
@@ -99,11 +99,11 @@ module memory_sd #(
     ) u_loader (
         .clk           (clk),
         .rst           (rst),
-        .blk_req       (blk_req),
-        .blk_addr      (blk_addr),
-        .blk_done      (blk_done),
-        .blk_data      (blk_data),
-        .blk_valid     (blk_valid),
+        .block_req       (block_req),
+        .block_addr      (block_addr),
+        .block_done      (block_done),
+        .block_data      (block_data),
+        .block_valid     (block_valid),
         .sd_ready      (sd_ready),
         .sd_error      (sd_error),
         .bus_req       (bus_req),

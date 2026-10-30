@@ -37,22 +37,22 @@ module sd_loader_tb;
 
     // ---------------- card side ----------------
     logic        cs_n, sck, mosi, miso;
-    logic        blk_req;
-    logic [31:0] blk_addr;
-    logic        blk_busy, blk_done, blk_valid;
-    logic [31:0] blk_data;
+    logic        block_req;
+    logic [31:0] block_addr;
+    logic        block_busy, block_done, block_valid;
+    logic [31:0] block_data;
     logic        sd_ready, sd_error;
     logic [3:0]  sd_err_code;
     logic [1:0]  card_type;
     logic [4:0]  ctrl_state;
 
     sd_controller #(
-        .DIV_INIT      (16'd4),
-        .DIV_DATA      (16'd1),
+        .DIVIDER_INIT      (16'd4),
+        .DIVIDER_DATA      (16'd1),
         .POWERUP_BYTES (10),
-        .POLL_MAX      (6),
-        .RETRY_MAX     (4),
-        .TOKEN_MAX     (8)
+        .R1_POLL_BYTES      (6),
+        .ACMD41_MAX_RETRIES     (4),
+        .TOKEN_TIMEOUT_BYTES     (8)
     ) u_ctrl (
         .clk       (clk),
         .rst       (rst),
@@ -60,12 +60,12 @@ module sd_loader_tb;
         .sck       (sck),
         .mosi      (mosi),
         .miso      (miso),
-        .blk_req   (blk_req),
-        .blk_addr  (blk_addr),
-        .blk_busy  (blk_busy),
-        .blk_done  (blk_done),
-        .blk_data  (blk_data),
-        .blk_valid (blk_valid),
+        .block_req   (block_req),
+        .block_addr  (block_addr),
+        .block_busy  (block_busy),
+        .block_done  (block_done),
+        .block_data  (block_data),
+        .block_valid (block_valid),
         .ready     (sd_ready),
         .error     (sd_error),
         .err_code  (sd_err_code),
@@ -74,9 +74,9 @@ module sd_loader_tb;
     );
 
     // ---------------- card ----------------
-    logic [7:0]  ncr_ff      = 8'd3;
-    logic [7:0]  token_delay = 8'd5;
-    logic [15:0] ready_after = 16'd1;
+    logic [7:0]  r1_idle_bytes      = 8'd3;
+    logic [7:0]  token_idle_bytes = 8'd5;
+    logic [15:0] ready_after_tries = 16'd1;
 
     logic fault_silent      = 1'b0;
     logic fault_bad_echo    = 1'b0;
@@ -95,9 +95,9 @@ module sd_loader_tb;
         .sck               (sck),
         .mosi              (mosi),
         .miso              (miso),
-        .ncr_ff            (ncr_ff),
-        .token_delay       (token_delay),
-        .ready_after       (ready_after),
+        .r1_idle_bytes            (r1_idle_bytes),
+        .token_idle_bytes       (token_idle_bytes),
+        .ready_after_tries       (ready_after_tries),
         .fault_silent      (fault_silent),
         .fault_bad_echo    (fault_bad_echo),
         .fault_never_ready (fault_never_ready),
@@ -106,7 +106,7 @@ module sd_loader_tb;
         .fault_sdsc        (fault_sdsc),
         .fault_v1          (fault_v1),
         .cmd_count         (card_cmd_count),
-        .last_op           (card_last_op)
+        .last_opcode           (card_last_op)
     );
 
 
@@ -124,11 +124,11 @@ module sd_loader_tb;
     ) u_loader (
         .clk           (clk),
         .rst           (rst),
-        .blk_req       (blk_req),
-        .blk_addr      (blk_addr),
-        .blk_done      (blk_done),
-        .blk_data      (blk_data),
-        .blk_valid     (blk_valid),
+        .block_req       (block_req),
+        .block_addr      (block_addr),
+        .block_done      (block_done),
+        .block_data      (block_data),
+        .block_valid     (block_valid),
         .sd_ready      (sd_ready),
         .sd_error      (sd_error),
         .bus_req       (loader_req),
@@ -150,11 +150,11 @@ module sd_loader_tb;
     // every answer take ten cycles instead of one.
     // --------------------------------------------------------
 
-    logic [31:0] mem [0:16383];
+    logic [31:0] target_memory [0:16383];
     logic [31:0] target_writes = 32'd0;
     logic [31:0] target_reads  = 32'd0;
     logic        read_seen     = 1'b0;
-    logic        write_first   = 1'b0;      // a write arrived too early
+    logic        write_before_read   = 1'b0;      // a write arrived too early
     logic        contract_bad  = 1'b0;      // strb/alignment/stability
     logic        slow_bus      = 1'b0;
 
@@ -162,14 +162,17 @@ module sd_loader_tb;
     logic        held_valid;
     logic        just_ready;    // ignore valid for one cycle after ready
 
-    typedef enum logic [1:0] { T_IDLE, T_WAIT } tstate_e;
-    tstate_e     tstate;
-    logic [4:0]  t_wait;
+    typedef enum logic [1:0] {
+        TargetIdle = 2'd0,   // a request is up
+        TargetWait = 2'd1    // counting down to ready
+    } target_state_e;
+    target_state_e     target_state_q;
+    logic [4:0]  wait_count;
 
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
-            tstate       <= T_IDLE;
-            t_wait       <= 5'd0;
+            target_state_q       <= TargetIdle;
+            wait_count       <= 5'd0;
             loader_rsp   <= '0;
             held_addr    <= 32'd0;
             held_wdata   <= 32'd0;
@@ -188,8 +191,8 @@ module sd_loader_tb;
                 end
             end
 
-            case (tstate)
-                T_IDLE: begin
+            case (target_state_q)
+                TargetIdle: begin
                     just_ready <= 1'b0;
 
                     // A master drops valid on the cycle after ready, so
@@ -199,7 +202,7 @@ module sd_loader_tb;
                         held_addr  <= loader_req.addr;
                         held_wdata <= loader_req.wdata;
                         held_valid <= 1'b1;
-                        t_wait     <= slow_bus ? 5'd9 : 5'd0;
+                        wait_count     <= slow_bus ? 5'd9 : 5'd0;
 
                         // Every write must be a full, aligned word in
                         // the DDR3 window.
@@ -211,31 +214,31 @@ module sd_loader_tb;
                         if (loader_req.op == soc_pkg::BusWrite) begin
                             target_writes <= target_writes + 32'd1;
                             if (!read_seen)
-                                write_first <= 1'b1;
+                                write_before_read <= 1'b1;
                         end else begin
                             target_reads <= target_reads + 32'd1;
                             read_seen    <= 1'b1;
                         end
 
-                        tstate <= T_WAIT;
+                        target_state_q <= TargetWait;
                     end
                 end
 
-                T_WAIT: begin
-                    if (t_wait == 5'd0) begin
+                TargetWait: begin
+                    if (wait_count == 5'd0) begin
                         loader_rsp.ready <= 1'b1;
                         held_valid       <= 1'b0;
                         just_ready       <= 1'b1;
                         if (loader_req.op == soc_pkg::BusWrite)
-                            mem[(loader_req.addr - DDR3_BASE) >> 2]
+                            target_memory[(loader_req.addr - DDR3_BASE) >> 2]
                                 <= loader_req.wdata;
-                        tstate <= T_IDLE;
+                        target_state_q <= TargetIdle;
                     end else begin
-                        t_wait <= t_wait - 5'd1;
+                        wait_count <= wait_count - 5'd1;
                     end
                 end
 
-                default: tstate <= T_IDLE;
+                default: target_state_q <= TargetIdle;
             endcase
         end
     end
@@ -249,10 +252,10 @@ module sd_loader_tb;
     // ========================================================
 
     logic [31:0] hdr [0:3];
-    logic [7:0]  bv;
-    int          n_wait;
-    logic [31:0] exp_w;
-    int          exp_i;
+    logic [7:0]  byte_value;
+    int          waited_cycles;
+    logic [31:0] expected_word;
+    int          expected_index;
 
     // Payload byte i of payload block p, and the bus word it becomes:
     // four bytes, the first one least significant.
@@ -282,21 +285,21 @@ module sd_loader_tb;
 
         for (int k = 0; k < 128; k++) begin
             w = (k < 4) ? hdr[k] : 32'h0;
-            u_card.blk[0*512 + 4*k + 0] = w[7:0];
-            u_card.blk[0*512 + 4*k + 1] = w[15:8];
-            u_card.blk[0*512 + 4*k + 2] = w[23:16];
-            u_card.blk[0*512 + 4*k + 3] = w[31:24];
+            u_card.block_store[0*512 + 4*k + 0] = w[7:0];
+            u_card.block_store[0*512 + 4*k + 1] = w[15:8];
+            u_card.block_store[0*512 + 4*k + 2] = w[23:16];
+            u_card.block_store[0*512 + 4*k + 3] = w[31:24];
         end
 
         for (int p = 1; p <= blocks; p++) begin
             for (int i = 0; i < 512; i++) begin
-                bv = payload_byte(p, i);
-                u_card.blk[p*512 + i] = bv;
+                byte_value = payload_byte(p, i);
+                u_card.block_store[p*512 + i] = byte_value;
             end
         end
     endtask
 
-    task automatic do_reset();
+    task automatic reset_dut();
         rst = 1'b1;
         repeat (5) @(negedge clk);
         rst = 1'b0;
@@ -305,19 +308,19 @@ module sd_loader_tb;
         target_writes = 32'd0;
         target_reads  = 32'd0;
         read_seen     = 1'b0;
-        write_first   = 1'b0;
+        write_before_read   = 1'b0;
         contract_bad  = 1'b0;
 
         // Poison, so a word nobody wrote cannot be mistaken for data.
         for (int i = 0; i < 16384; i++)
-            mem[i] = 32'hDEAD_BEEF;
+            target_memory[i] = 32'hDEAD_BEEF;
     endtask
 
     task automatic wait_load(input int max_cycles, input string name);
-        n_wait = 0;
-        while (!load_done && !load_error && n_wait < max_cycles) begin
+        waited_cycles = 0;
+        while (!load_done && !load_error && waited_cycles < max_cycles) begin
             @(negedge clk);
-            n_wait++;
+            waited_cycles++;
         end
         checks++;
         if (!load_done && !load_error) begin
@@ -340,7 +343,7 @@ module sd_loader_tb;
     endtask
 
     // Everything a good load has to get right.
-    task automatic check_image(input int blocks, input logic [31:0] dest_off,
+    task automatic check_loaded_image(input int blocks, input logic [31:0] dest_off,
                                input string name);
         int words;
         words = blocks * 128;
@@ -374,7 +377,7 @@ module sd_loader_tb;
         end
 
         checks++;
-        if (write_first) begin
+        if (write_before_read) begin
             errors++;
             $display("FAIL %s: a payload write arrived before the warm-up read",
                      name);
@@ -390,12 +393,12 @@ module sd_loader_tb;
         checks++;
         for (int p = 1; p <= blocks; p++) begin
             for (int k = 0; k < 128; k++) begin
-                exp_w = payload_word(p, k);
-                exp_i = (dest_off >> 2) + (p-1)*128 + k;
-                if (mem[exp_i] !== exp_w) begin
+                expected_word = payload_word(p, k);
+                expected_index = (dest_off >> 2) + (p-1)*128 + k;
+                if (target_memory[expected_index] !== expected_word) begin
                     errors++;
                     $display("FAIL %s: block %0d word %0d = %08h, expected %08h",
-                             name, p, k, mem[exp_i], exp_w);
+                             name, p, k, target_memory[expected_index], expected_word);
                 end
             end
         end
@@ -404,7 +407,7 @@ module sd_loader_tb;
         checks++;
         for (int i = (dest_off >> 2) + words;
              i < (dest_off >> 2) + words + 4; i++) begin
-            if (mem[i] !== 32'hDEAD_BEEF) begin
+            if (target_memory[i] !== 32'hDEAD_BEEF) begin
                 errors++;
                 $display("FAIL %s: word %0d past the payload was written",
                          name, i);
@@ -427,9 +430,9 @@ module sd_loader_tb;
         // 1. a good image: three blocks at offset 0x100
         // ----------------------------------------------------
         build_image(3, 32'h100, 32'd1536 - 32'd13);
-        do_reset();
+        reset_dut();
         wait_load(4_000_000, "good image");
-        check_image(3, 32'h100, "good image");
+        check_loaded_image(3, 32'h100, "good image");
 
         // ----------------------------------------------------
         // 2. the same thing over a bus that takes ten cycles per
@@ -437,17 +440,17 @@ module sd_loader_tb;
         // ----------------------------------------------------
         slow_bus = 1'b1;
         build_image(2, 32'h400, 32'd1024);
-        do_reset();
+        reset_dut();
         wait_load(4_000_000, "slow bus");
-        check_image(2, 32'h400, "slow bus");
+        check_loaded_image(2, 32'h400, "slow bus");
         slow_bus = 1'b0;
 
         // ----------------------------------------------------
         // 3. a header with the wrong magic
         // ----------------------------------------------------
         build_image(1, 32'h0, 32'd512);
-        u_card.blk[0] = 8'h00;              // break the magic
-        do_reset();
+        u_card.block_store[0] = 8'h00;              // break the magic
+        reset_dut();
         wait_load(4_000_000, "bad magic");
         check_load_error(4'd2, "bad magic");
 
@@ -455,7 +458,7 @@ module sd_loader_tb;
         // 4. a header that claims no payload
         // ----------------------------------------------------
         build_image(0, 32'h0, 32'd0);
-        do_reset();
+        reset_dut();
         wait_load(4_000_000, "zero blocks");
         check_load_error(4'd3, "zero blocks");
 
@@ -463,7 +466,7 @@ module sd_loader_tb;
         // 5. a header whose payload runs off the end of the window
         // ----------------------------------------------------
         build_image(1, 32'h07FF_FFF0, 32'd512);
-        do_reset();
+        reset_dut();
         wait_load(4_000_000, "out of range");
         check_load_error(4'd4, "out of range");
 
@@ -472,7 +475,7 @@ module sd_loader_tb;
         // ----------------------------------------------------
         build_image(1, 32'h0, 32'd512);
         fault_no_token = 1'b1;
-        do_reset();
+        reset_dut();
         wait_load(4_000_000, "card error");
         check_load_error(4'd1, "card error");
         fault_no_token = 1'b0;

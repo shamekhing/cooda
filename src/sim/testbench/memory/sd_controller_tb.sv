@@ -14,7 +14,7 @@
 //   4. an old (v1) card that rejects CMD8 is recognised, and CMD58
 //      is skipped for it
 //   5. block reads: 128 words per block, in order, assembled little
-//      endian, with blk_busy and blk_done behaving
+//      endian, with block_busy and block_done behaving
 //   6. the card's Ncr bytes and token delay are waited out rather
 //      than assumed away
 //   7. every failure has a code: a deaf card (CMD0), a bad CMD8
@@ -35,22 +35,22 @@ module sd_controller_tb;
 
     // ---------------- DUT ----------------
     logic        cs_n, sck, mosi, miso;
-    logic        blk_req;
-    logic [31:0] blk_addr;
-    logic        blk_busy, blk_done, blk_valid;
-    logic [31:0] blk_data;
+    logic        block_req;
+    logic [31:0] block_addr;
+    logic        block_busy, block_done, block_valid;
+    logic [31:0] block_data;
     logic        ready, error;
     logic [3:0]  err_code;
     logic [1:0]  card_type;
     logic [4:0]  state_dbg;
 
     sd_controller #(
-        .DIV_INIT      (16'd4),
-        .DIV_DATA      (16'd1),
+        .DIVIDER_INIT      (16'd4),
+        .DIVIDER_DATA      (16'd1),
         .POWERUP_BYTES (10),
-        .POLL_MAX      (6),
-        .RETRY_MAX     (4),
-        .TOKEN_MAX     (8)
+        .R1_POLL_BYTES      (6),
+        .ACMD41_MAX_RETRIES     (4),
+        .TOKEN_TIMEOUT_BYTES     (8)
     ) dut (
         .clk       (clk),
         .rst       (rst),
@@ -58,12 +58,12 @@ module sd_controller_tb;
         .sck       (sck),
         .mosi      (mosi),
         .miso      (miso),
-        .blk_req   (blk_req),
-        .blk_addr  (blk_addr),
-        .blk_busy  (blk_busy),
-        .blk_done  (blk_done),
-        .blk_data  (blk_data),
-        .blk_valid (blk_valid),
+        .block_req   (block_req),
+        .block_addr  (block_addr),
+        .block_busy  (block_busy),
+        .block_done  (block_done),
+        .block_data  (block_data),
+        .block_valid (block_valid),
         .ready     (ready),
         .error     (error),
         .err_code  (err_code),
@@ -72,9 +72,9 @@ module sd_controller_tb;
     );
 
     // ---------------- card ----------------
-    logic [7:0]  ncr_ff      = 8'd3;        // 0xFF bytes before an R1
-    logic [7:0]  token_delay = 8'd5;        // 0xFF bytes before 0xFE
-    logic [15:0] ready_after = 16'd2;       // ACMD41 attempts before ready
+    logic [7:0]  r1_idle_bytes      = 8'd3;        // 0xFF bytes before an R1
+    logic [7:0]  token_idle_bytes = 8'd5;        // 0xFF bytes before 0xFE
+    logic [15:0] ready_after_tries = 16'd2;       // ACMD41 attempts before ready
 
     logic fault_silent      = 1'b0;
     logic fault_bad_echo    = 1'b0;
@@ -85,7 +85,7 @@ module sd_controller_tb;
     logic fault_v1          = 1'b0;
 
     logic [15:0] cmd_count;
-    logic [5:0]  last_op;
+    logic [5:0]  last_opcode;
 
     sd_model u_card (
         .rst             (rst),
@@ -93,9 +93,9 @@ module sd_controller_tb;
         .sck             (sck),
         .mosi            (mosi),
         .miso            (miso),
-        .ncr_ff          (ncr_ff),
-        .token_delay     (token_delay),
-        .ready_after     (ready_after),
+        .r1_idle_bytes          (r1_idle_bytes),
+        .token_idle_bytes     (token_idle_bytes),
+        .ready_after_tries     (ready_after_tries),
         .fault_silent    (fault_silent),
         .fault_bad_echo  (fault_bad_echo),
         .fault_never_ready (fault_never_ready),
@@ -104,7 +104,7 @@ module sd_controller_tb;
         .fault_sdsc      (fault_sdsc),
         .fault_v1        (fault_v1),
         .cmd_count       (cmd_count),
-        .last_op         (last_op)
+        .last_opcode         (last_opcode)
     );
 
     int errors = 0;
@@ -119,16 +119,16 @@ module sd_controller_tb;
     // intended to send.
     // --------------------------------------------------------
 
-    int          op_log [0:31];
-    int          op_n = 0;
-    logic [15:0] cmd_count_d = 16'd0;
+    int          command_log [0:31];
+    int          logged_commands = 0;
+    logic [15:0] card_cmd_count_seen = 16'd0;
 
     always @(posedge clk) begin
-        if (cmd_count != cmd_count_d) begin
-            cmd_count_d <= cmd_count;
-            if (op_n < 32) begin
-                op_log[op_n] = last_op;
-                op_n++;
+        if (cmd_count != card_cmd_count_seen) begin
+            card_cmd_count_seen <= cmd_count;
+            if (logged_commands < 32) begin
+                command_log[logged_commands] = last_opcode;
+                logged_commands++;
             end
         end
     end
@@ -137,9 +137,9 @@ module sd_controller_tb;
     // HELPERS
     // ========================================================
 
-    int          exp_ops [0:15];
-    logic [7:0]  byte_v;
-    int          n_wait;
+    int          expected_ops [0:15];
+    logic [7:0]  byte_value;
+    int          waited_cycles;
 
     // The pattern the testbench loads into the card: byte i of block
     // b is (b*64 + i) truncated to 8 bits. A bus word is four of
@@ -155,22 +155,22 @@ module sd_controller_tb;
         exp_word[31:24] = o + 3;
     endfunction
 
-    task automatic do_reset();
+    task automatic reset_dut();
         rst = 1'b1;
         repeat (5) @(negedge clk);
         rst = 1'b0;
         repeat (5) @(negedge clk);
-        op_n        = 0;
-        cmd_count_d = 16'd0;
-        blk_req     = 1'b0;
+        logged_commands        = 0;
+        card_cmd_count_seen = 16'd0;
+        block_req     = 1'b0;
     endtask
 
     // Wait for the wake-up sequence to finish one way or the other.
     task automatic wait_init(input int max_cycles, input string name);
-        n_wait = 0;
-        while (!ready && !error && n_wait < max_cycles) begin
+        waited_cycles = 0;
+        while (!ready && !error && waited_cycles < max_cycles) begin
             @(negedge clk);
-            n_wait++;
+            waited_cycles++;
         end
         checks++;
         if (!ready && !error) begin
@@ -181,10 +181,10 @@ module sd_controller_tb;
     endtask
 
     task automatic wait_err(input int max_cycles, input string name);
-        n_wait = 0;
-        while (!error && n_wait < max_cycles) begin
+        waited_cycles = 0;
+        while (!error && waited_cycles < max_cycles) begin
             @(negedge clk);
-            n_wait++;
+            waited_cycles++;
         end
         checks++;
         if (!error) begin
@@ -205,18 +205,18 @@ module sd_controller_tb;
     endtask
 
     // The exact sequence of commands the card saw.
-    task automatic check_ops(input int len, input string name);
+    task automatic check_command_log(input int len, input string name);
         checks++;
-        if (op_n != len) begin
+        if (logged_commands != len) begin
             errors++;
             $display("FAIL %s: %0d commands reached the card, expected %0d",
-                     name, op_n, len);
+                     name, logged_commands, len);
         end else begin
             for (int i = 0; i < len; i++) begin
-                if (op_log[i] != exp_ops[i]) begin
+                if (command_log[i] != expected_ops[i]) begin
                     errors++;
                     $display("FAIL %s: command %0d was %0d, expected %0d",
-                             name, i, op_log[i], exp_ops[i]);
+                             name, i, command_log[i], expected_ops[i]);
                 end
             end
         end
@@ -230,26 +230,26 @@ module sd_controller_tb;
         n = 0;
 
         @(negedge clk);
-        blk_addr = b;
-        blk_req  = 1'b1;
+        block_addr = b;
+        block_req  = 1'b1;
         @(negedge clk);
-        blk_req  = 1'b0;
+        block_req  = 1'b0;
 
         checks++;
-        if (!blk_busy) begin
+        if (!block_busy) begin
             errors++;
-            $display("FAIL %s: blk_busy is low after the request", name);
+            $display("FAIL %s: block_busy is low after the request", name);
         end
 
-        // Collect the 128 words. blk_done comes several byte times
+        // Collect the 128 words. block_done comes several byte times
         // after the last word, so checking it first cannot lose one.
-        while (!blk_done && !error) begin
+        while (!block_done && !error) begin
             @(negedge clk);
-            if (blk_valid) begin
-                if (n < 128 && blk_data !== exp_word(b, n)) begin
+            if (block_valid) begin
+                if (n < 128 && block_data !== exp_word(b, n)) begin
                     errors++;
                     $display("FAIL %s: word %0d = %08h, expected %08h",
-                             name, n, blk_data, exp_word(b, n));
+                             name, n, block_data, exp_word(b, n));
                 end
                 n++;
             end
@@ -261,17 +261,17 @@ module sd_controller_tb;
             $display("FAIL %s: %0d words, expected 128", name, n);
         end
         checks++;
-        if (!blk_done) begin
+        if (!block_done) begin
             errors++;
-            $display("FAIL %s: no blk_done (error=%0b code=%0d)",
+            $display("FAIL %s: no block_done (error=%0b code=%0d)",
                      name, error, err_code);
         end
 
         @(negedge clk);
         checks++;
-        if (blk_busy) begin
+        if (block_busy) begin
             errors++;
-            $display("FAIL %s: blk_busy is still high after blk_done", name);
+            $display("FAIL %s: block_busy is still high after block_done", name);
         end
     endtask
     // ========================================================
@@ -279,8 +279,8 @@ module sd_controller_tb;
     // ========================================================
 
     initial begin
-        blk_req  = 1'b0;
-        blk_addr = 32'd0;
+        block_req  = 1'b0;
+        block_addr = 32'd0;
 
         repeat (5) @(negedge clk);
 
@@ -290,15 +290,15 @@ module sd_controller_tb;
         // at time zero run in no defined order.
         for (int b = 0; b < 8; b++) begin
             for (int i = 0; i < 512; i++) begin
-                byte_v = (b*64 + i) & 8'hFF;
-                u_card.blk[b*512 + i] = byte_v;
+                byte_value = (b*64 + i) & 8'hFF;
+                u_card.block_store[b*512 + i] = byte_value;
             end
         end
 
         // ----------------------------------------------------
         // 1. SDHC: the wake-up sequence, command for command
         // ----------------------------------------------------
-        do_reset();
+        reset_dut();
         wait_init(400_000, "init sdhc");
         checks++;
         if (!ready) begin
@@ -313,10 +313,10 @@ module sd_controller_tb;
             end
         end
 
-        exp_ops[0]=0;  exp_ops[1]=8;  exp_ops[2]=55; exp_ops[3]=41;
-        exp_ops[4]=55; exp_ops[5]=41; exp_ops[6]=55; exp_ops[7]=41;
-        exp_ops[8]=58; exp_ops[9]=16;
-        check_ops(10, "init sdhc");
+        expected_ops[0]=0;  expected_ops[1]=8;  expected_ops[2]=55; expected_ops[3]=41;
+        expected_ops[4]=55; expected_ops[5]=41; expected_ops[6]=55; expected_ops[7]=41;
+        expected_ops[8]=58; expected_ops[9]=16;
+        check_command_log(10, "init sdhc");
 
         // ----------------------------------------------------
         // 2. block reads: 128 words each, in order, little endian
@@ -347,7 +347,7 @@ module sd_controller_tb;
         // 3. SDSC: an older card is addressed in bytes
         // ----------------------------------------------------
         fault_sdsc = 1'b1;
-        do_reset();
+        reset_dut();
         wait_init(400_000, "init sdsc");
         checks++;
         if (!ready) begin
@@ -377,7 +377,7 @@ module sd_controller_tb;
         // 4. an old card that rejects CMD8: no OCR, so no CMD58
         // ----------------------------------------------------
         fault_v1 = 1'b1;
-        do_reset();
+        reset_dut();
         wait_init(400_000, "init v1");
         checks++;
         if (!ready) begin
@@ -392,10 +392,10 @@ module sd_controller_tb;
             end
         end
 
-        exp_ops[0]=0;  exp_ops[1]=8;  exp_ops[2]=55; exp_ops[3]=41;
-        exp_ops[4]=55; exp_ops[5]=41; exp_ops[6]=55; exp_ops[7]=41;
-        exp_ops[8]=16;
-        check_ops(9, "init v1");
+        expected_ops[0]=0;  expected_ops[1]=8;  expected_ops[2]=55; expected_ops[3]=41;
+        expected_ops[4]=55; expected_ops[5]=41; expected_ops[6]=55; expected_ops[7]=41;
+        expected_ops[8]=16;
+        check_command_log(9, "init v1");
         fault_v1 = 1'b0;
 
         // ----------------------------------------------------
@@ -404,28 +404,28 @@ module sd_controller_tb;
 
         // a deaf card: CMD0 is never answered
         fault_silent = 1'b1;
-        do_reset();
+        reset_dut();
         wait_init(400_000, "deaf card");
         check_error(4'd1, "deaf card");
         fault_silent = 1'b0;
 
         // CMD8 answers, but not with the check pattern
         fault_bad_echo = 1'b1;
-        do_reset();
+        reset_dut();
         wait_init(400_000, "bad cmd8 echo");
         check_error(4'd2, "bad cmd8 echo");
         fault_bad_echo = 1'b0;
 
         // ACMD41 never reports ready
         fault_never_ready = 1'b1;
-        do_reset();
+        reset_dut();
         wait_init(400_000, "never ready");
         check_error(4'd3, "never ready");
         fault_never_ready = 1'b0;
 
         // CMD17 is rejected
         fault_bad_cmd17 = 1'b1;
-        do_reset();
+        reset_dut();
         wait_init(400_000, "init for the cmd17 fault");
         checks++;
         if (!ready) begin
@@ -433,17 +433,17 @@ module sd_controller_tb;
             $display("FAIL cmd17 fault: the card never initialised");
         end
         @(negedge clk);
-        blk_addr = 32'd1;
-        blk_req  = 1'b1;
+        block_addr = 32'd1;
+        block_req  = 1'b1;
         @(negedge clk);
-        blk_req  = 1'b0;
+        block_req  = 1'b0;
         wait_err(400_000, "cmd17 rejected");
         check_error(4'd6, "cmd17 rejected");
         fault_bad_cmd17 = 1'b0;
 
         // the card accepts the read but never sends the data token
         fault_no_token = 1'b1;
-        do_reset();
+        reset_dut();
         wait_init(400_000, "init for the token fault");
         checks++;
         if (!ready) begin
@@ -451,10 +451,10 @@ module sd_controller_tb;
             $display("FAIL token fault: the card never initialised");
         end
         @(negedge clk);
-        blk_addr = 32'd1;
-        blk_req  = 1'b1;
+        block_addr = 32'd1;
+        block_req  = 1'b1;
         @(negedge clk);
-        blk_req  = 1'b0;
+        block_req  = 1'b0;
         wait_err(400_000, "no data token");
         check_error(4'd7, "no data token");
         fault_no_token = 1'b0;
