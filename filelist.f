@@ -11,9 +11,13 @@ src/rtl/bus/bus_arbiter.sv
 src/rtl/memory/ddr3/ddr3_cdc.sv
 src/rtl/memory/ddr3/ddr3_controller.sv
 src/rtl/memory/ddr3/ddr3_pll.sv
+src/rtl/memory/sd/sd_spi_master.sv
+src/rtl/memory/sd/sd_controller.sv
+src/rtl/memory/sd/sd_loader.sv
 src/rtl/memory/memory_bsram.sv
 src/rtl/memory/memory.sv
 src/rtl/memory/memory_ddr3.sv
+src/rtl/memory/memory_sd.sv
 
 src/rtl/cpu/alu/cpu_alu_arithmetic.sv
 src/rtl/cpu/alu/cpu_alu_logic_unit.sv

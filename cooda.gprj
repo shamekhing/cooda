@@ -27,6 +27,10 @@
         <File path="src/rtl/memory/memory.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory_bsram.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory_ddr3.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/memory_sd.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/sd/sd_controller.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/sd/sd_loader.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/sd/sd_spi_master.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/alu_pkg.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/arch_pkg.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/packages/isa_pkg.sv" type="file.verilog" enable="1"/>
