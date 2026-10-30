@@ -10,7 +10,10 @@ module system_tb;
     system dut (
         .clk(clk), .rst(rst), .run(run),
         .retire_valid(retire_valid),
-        .illegal_instr(illegal_instr), .cpu_fault(cpu_fault)
+        .illegal_instr(illegal_instr), .cpu_fault(cpu_fault),
+        // The microSD path is disabled here, so the card input only
+        // needs a defined level rather than a wire.
+        .sd_miso(1'b1)
     );
 
     always_ff @(posedge clk) begin

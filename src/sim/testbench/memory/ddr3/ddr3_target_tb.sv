@@ -53,6 +53,13 @@ module ddr3_target_tb;
 
     int errors = 0;
     int checks = 0;
+    int clk_cycles = 0;
+    int bench_start_cycles;
+    int bench_end_cycles;
+    int bench_words;
+    real bench_mib_per_s;
+
+    always @(posedge clk) clk_cycles++;
 
     // Short refresh period so the scheduler is exercised, and a short
     // calibration wait so its timeout path is reachable in simulation.
@@ -349,6 +356,27 @@ module ddr3_target_tb;
                      fake_mem[8], fake_mem[9]);
         end
         expect_read(32'h0000_0010, 32'hAABB_CCDD, "read back");
+
+        // Measure sequential bus writes through the adapter and CDC.
+        // This behavioral controller benchmark is useful for RTL
+        // transaction overhead; it does not model PHY/DRAM timing.
+        bench_words = 64;
+        @(negedge clk);
+        bench_start_cycles = clk_cycles;
+        for (int i = 0; i < bench_words; i++) begin
+            bus_access(32'h0000_0400 + 32'(i*4), 1'b1,
+                       32'hA500_0000 | 32'(i), BUS_STRB_ALL,
+                       rd_v, err_v);
+            if (err_v) begin
+                errors++;
+                $display("FAIL DDR target benchmark: write %0d errored", i);
+            end
+        end
+        bench_end_cycles = clk_cycles;
+        bench_mib_per_s = real'(bench_words * 4) * 27.0 /
+                          real'(bench_end_cycles - bench_start_cycles);
+        $display("DDR target sequential writes: %0d words in %0d clk27 cycles = %0.2f MiB/s (behavioral controller)",
+                 bench_words, bench_end_cycles - bench_start_cycles, bench_mib_per_s);
 
         // The bus payload is captured when accepted, even if the
         // requester changes it before the CDC completes.
