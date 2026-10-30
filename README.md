@@ -90,7 +90,11 @@ For a card that has to keep its filesystem, build the image with `--dest-offset`
 
 ### Speed
 
-The card runs at 397 kHz while it wakes up and 13.5 MHz for data, which is about 1.6 MB/s of payload: the 60,000-image training set is 47 MB, so roughly 30 seconds. More is possible - 25 MHz needs the card pins in a faster clock domain, and the slot also has the two data lines native 4-bit mode needs - but the DDR3 write path, about 8-9 MB/s with one 16-bit transaction at a time, is the ceiling rather than the card.
+The card runs at 397 kHz during initialization and 13.5 MHz during data transfer. SPI carries one bit per clock, so 13.5 MHz gives a raw ceiling of 1.69 MB/s (about 1.6 MiB/s); a 25 MHz SPI clock would raise that only to 3.125 MB/s raw. `sd_controller` issues one CMD17 per 512-byte block, adding command, response, token, CRC, tail, and byte-engine handshake overhead, so the payload rate lands a little under that ceiling: the 60,000-image training set is 47 MB, which loads in about 30 seconds.
+
+The DDR3 write path is not what limits a load. A benchmark in `ddr3_target_tb.sv` measures sequential writes through the adapter and its clock crossing at 7.18 MiB/s (about 7.5 MB/s) - roughly five times the card path - and it measures RTL transaction overhead only: it runs against a behavioral controller and says nothing about PHY or DRAM timing.
+
+The dock routes all four SD data pins (DAT0..DAT3), but this RTL uses them as SPI MISO, MOSI, CS, and clock. A native four-bit bus at 50 MHz would have a raw bus ceiling of 25 MB/s; 50 MB/s requires a 100 MHz four-bit mode (SDR50) and 1.8 V signaling. SDR104 reaches 104 MB/s at 208 MHz, also at 1.8 V. The Tang Primer 20K bank voltage defaults to 3.3 V, so the dock's actual SD voltage-switching path and FPGA bank configuration must be verified before enabling UHS-I modes. A four-bit card would also need the DDR3 write path widened first: it moves one 32-bit word as two serial 16-bit commands, one transaction at a time, so a card faster than the measured 7.5 MB/s would trip the loader's overrun trap instead of loading.
 
 ### Failures
 

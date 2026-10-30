@@ -79,6 +79,10 @@ run_test "DDR3 CDC" ddr3_cdc_tb ddr3_cdc_sim "" \
     -f filelist.f \
     src/sim/testbench/memory/ddr3_cdc_tb.sv
 
+run_test "DDR3 TARGET / WRITE THROUGHPUT" ddr3_target_tb ddr3_target_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/ddr3_target_tb.sv
+
 run_test "SD SPI MASTER" sd_spi_master_tb sd_spi_master_sim "" \
     -f filelist.f \
     src/sim/testbench/memory/sd_spi_master_tb.sv
@@ -110,10 +114,6 @@ if [[ -f data/mnist/train-images.idx3-ubyte && \
 else
     echo "========== SD IMAGE END TO END: SKIPPED (no MNIST IDX files in data/mnist) =========="
 fi
-
-run_test "DDR3 TARGET" ddr3_target_tb ddr3_target_sim "" \
-    -f filelist.f \
-    src/sim/testbench/memory/ddr3_target_tb.sv
 
 run_test "MEMORY MAP" memory_map_tb memory_map_sim "" \
     -f filelist.f \
