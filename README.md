@@ -2,13 +2,13 @@
 
 A 32-bit von Neumann computer on the Sipeed Tang Primer 20K (Gowin
 GW2A-LV18PG256C8/I7), built from scratch in SystemVerilog. It boots from
-on-chip BSRAM, fills its 128 MiB DDR3 from a microSD card at
-configuration time no CPU program involved and shows the dataset
+on-chip BSRAM, fills its 128 MiB DDR3 from a PC over UART (or a microSD
+card) with no CPU program involved, and shows the dataset
 it loaded on an HDMI monitor: one MNIST digit at a time, upscaled and
 centred, at a rate you set with buttons.
 
 Everything is RTL: a hand-rolled CPU, a round-robin bus, a DDR3
-controller over the vendor PHY primitives, an SPI card reader, and a
+controller over the vendor PHY primitives, UART and SPI dataset loaders, and a
 TMDS display backend with no IDE-generated IP the same HDL
 synthesizes with Gowin and simulates with Icarus.
 
@@ -17,13 +17,15 @@ synthesizes with Gowin and simulates with Icarus.
 | CPU | 32-bit, von Neumann, byte-addressed bus |
 | Boot memory | 32 KiB on-chip BSRAM, initialised from hex |
 | Main memory | 128 MiB DDR3 at 0x0800_0000 (DDR3-800, 16-bit) |
-| Dataset input | microSD, SPI mode, loaded at boot by hardware |
+| Dataset input | PC UART upload by default; microSD SPI alternative |
 | Display | HDMI 720p60, TMDS, 448x448 MNIST patch, 1..60 images/s |
 | Toolchain | Gowin EDA (synthesis + P&R), Icarus Verilog (simulation) |
 | Board | Sipeed Tang Primer 20K dock |
 
 Deeper detail and measured numbers: [doc/TECHNICAL_SPECS.md](doc/TECHNICAL_SPECS.md).
 Rules for adding code: [doc/NAMING_CONVENTIONS.md](doc/NAMING_CONVENTIONS.md).
+Repository organization: [doc/FILE_STRUCTURE.md](doc/FILE_STRUCTURE.md).
+PC-to-FPGA dataset upload: [doc/MNIST_QUICK_START.md](doc/MNIST_QUICK_START.md).
 
 ## Status
 
@@ -31,45 +33,19 @@ Rules for adding code: [doc/NAMING_CONVENTIONS.md](doc/NAMING_CONVENTIONS.md).
 | --- | --- |
 | CPU, ALU, bus, BSRAM | working, simulation-verified (14,510 ALU checks) |
 | DDR3 controller + PHY | synthesis and P&R close timing; verified against Micron's model in simulation |
+| UART MNIST loader | simulation-verified header, DDR writes, checksum, and errors; hardware transfer pending |
 | microSD loader | verified byte for byte against a real packer image in simulation |
 | HDMI display path | verified end to end in simulation (pixel-exact); not yet shown on a physical monitor |
-| Hardware bring-up | next step the LEDs report how far each path got |
+| Hardware bring-up | UART transfer and HDMI output still need board verification |
 
 ## Repository layout
 
-```
-cooda.gprj                            Gowin project (top: fpga_top)
-filelist.f                            Icarus compile order, mirrors the gprj
-run.sh                                the regression runner
-doc/TECHNICAL_SPECS.md                the technical specification
-doc/NAMING_CONVENTIONS.md             naming rules for new code
-tools/mnist_pack.py                   packs MNIST IDX files into a card image
-src/rtl/
-  packages/                           arch_pkg, soc_pkg, alu_pkg, isa_pkg
-  cpu/                                the CPU core and its parts
-  bus/                                bus_arbiter
-  memory/                             memory, memory_bsram, memory_ddr3, memory_sd
-    ddr3/                             ddr3_pll, ddr3_controller, ddr3_cdc
-    sd/                               sd_spi_master, sd_controller, sd_loader
-  soc/                                system.sv, fpga_top.sv
-  util/                               async_fifo, button_debounce
-  video/
-    mnist/                            mnist_view_top, mnist_fetch,
-                                      mnist_frame_source, mnist_rate
-    hdmi/                             hdmi_tx, hdmi_tmds_encoder,
-                                      hdmi_tmds_serializer, hdmi_rpll,
-                                      hdmi_timing
-src/rtl/soc/fpga_top.sv               the board wrapper (the synthesis top)
-src/programs/boot_program.hex         the boot image for the BSRAM
-src/constraints/                      the dock's .cst pins and .sdc timing
-src/sim/
-  vendor/                             where the Gowin/Micron models go (not included)
-  testbench/                          one folder per module, mirroring src/rtl
-  pkg_checks.sv                       package invariant checks
-src/programs/                         programs loaded into the BSRAM
-examples/                             vendor board examples, reference only
-data/mnist/                           MNIST IDX files (not included)
-```
+The source tree is organized by function; full placement rules are documented
+in [doc/FILE_STRUCTURE.md](doc/FILE_STRUCTURE.md). Reusable UART byte engines
+live together in `src/rtl/uart/`. All MNIST-specific RTL—including the
+UART-to-DDR3 loader and display path—lives in `src/rtl/mnist/`; host-side
+MNIST image tools are grouped in `tools/mnist/`. UART transport tests are
+in `src/sim/testbench/uart/`; MNIST tests are in `src/sim/testbench/mnist/`.
 
 ## How the machine works
 
@@ -80,7 +56,7 @@ data/mnist/                           MNIST IDX files (not included)
   reference model.
 - `bus_arbiter.sv` is a reusable four-client round-robin arbiter for one
   target. It holds a grant through target stalls. The current system
-  connects CPU instruction fetch, CPU data access, the microSD loader,
+  connects CPU instruction fetch, CPU data access, the selected dataset loader,
   and the display fetcher; the GPU and TPU are reserved for later
   integration. Instantiate another arbiter for each future shared target.
 - `memory.sv` routes the low BSRAM and DDR3 windows, checks
@@ -92,6 +68,11 @@ data/mnist/                           MNIST IDX files (not included)
   `sd_controller.sv`, `sd_loader.sv` under `memory/sd/`) and is what
   `system.sv` instantiates when `SD_ENABLE` is set. It loads a card
   image into DDR3 at boot with no CPU program involved.
+- `mnist_uart_loader.sv` receives the same packed image format over the
+  board USB-UART bridge and writes its payload to DDR3. The generic UART
+  byte engines live in `src/rtl/uart/`; MNIST-specific logic lives in
+  `src/rtl/mnist/`. UART is enabled by default in the board viewer; UART
+  and SD are mutually exclusive loader builds.
 - `system.sv` maps BSRAM at `0x0000_0000..0x0000_7fff` and 128 MiB DDR3
   at `0x0800_0000..0x0fff_ffff`. The BSRAM region remains the reset/boot
   region.
@@ -99,7 +80,7 @@ data/mnist/                           MNIST IDX files (not included)
   the raster, the frame source, and the display fetcher. It is what the
   board actually instantiates.
 - `fpga_top.sv` is the board wrapper: it exposes the Tang Primer 20K
-  dock pins DDR3, microSD, the two onboard buttons, two header-pin
+  dock pins DDR3, microSD, UART, the two onboard buttons, two header-pin
   rate buttons, the TMDS pairs, and the status LEDs and wires them to
   `mnist_view_top`.
 
@@ -119,13 +100,13 @@ primitives and is intended for the Tang Primer 20K dock.
 | Region | Address range | Size | Notes |
 | --- | --- | --- | --- |
 | BSRAM | `0x0000_0000..0x0000_7FFF` | 32 KiB | boot region, initialised from `boot_program.hex` |
-| DDR3 | `0x0800_0000..0x0FFF_FFFF` | 128 MiB | the card image lands here at boot |
+| DDR3 | `0x0800_0000..0x0FFF_FFFF` | 128 MiB | the uploaded or card image lands here |
 
 ### Clock domains
 
 | Clock | Frequency | Used by |
 | --- | --- | --- |
-| `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, microSD, image fetch |
+| `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, UART, microSD, image fetch |
 | `pclk` | 99.563 MHz | DDR3 controller command/data path |
 | `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serialiser (DDR3-800) |
 | `serial_clk` | 371.25 MHz | HDMI TMDS serialiser |
@@ -136,11 +117,25 @@ payload latched before the toggle moves); image data `clk27`-to-`pix_clk`
 through `async_fifo` (grey-coded pointers, combinational read data).
 Both are excluded from timing analysis as protocol CDCs.
 
-## Getting data in: the microSD path
+## Getting data in: UART from a PC (default)
 
-The core board's microSD slot (on the SODIMM module itself) is wired to the FPGA in SPI mode, and the card
-is how data reaches DDR3: there is no assembler yet, so there is no
-software that could copy a dataset, and the loader is hardware instead.
+By default, the FPGA waits for DDR3 calibration, announces readiness over
+the board USB-UART bridge, and receives the packed image from the PC. The
+full step-by-step guide—including dataset preparation, pack and upload
+commands, status codes, and troubleshooting—is in
+[doc/MNIST_QUICK_START.md](doc/MNIST_QUICK_START.md). The 60,000-record
+training set is about 47.1 MB and takes approximately 8.5 minutes at
+921600 baud, excluding host and USB-UART overhead.
+
+Set `UART_ENABLE=0` and `SD_ENABLE=1` in the board top parameters to
+build the microSD alternative. The two loaders share one bus slot and
+must not be enabled together.
+
+## Getting data in: the microSD path (alternate)
+
+The core board's microSD slot (on the SODIMM module itself) is wired to
+the FPGA in SPI mode. This is the alternate hardware loader when the
+board build selects `SD_ENABLE`.
 
 - `sd_spi_master.sv` clocks bytes on the four card pins (SPI mode 0),
   full duplex, with a divider the protocol layer rewrites between phases.
@@ -158,7 +153,7 @@ software that could copy a dataset, and the loader is hardware instead.
 
 ### Card image
 
-`tools/mnist_pack.py` turns MNIST IDX files into the raw image the
+`tools/mnist/mnist_pack.py` turns MNIST IDX files into the raw image the
 loader expects. Block 0 is a header of little-endian 32-bit words:
 
 | word | meaning |
@@ -178,9 +173,9 @@ The loader checks words 0..3 and refuses anything that does not fit the
 window; the rest is for whatever reads the data out of DDR3 later.
 
 ```sh
-python3 tools/mnist_pack.py \
-    --images data/mnist/train-images.idx3-ubyte \
-    --labels data/mnist/train-labels.idx1-ubyte \
+python3 tools/mnist/mnist_pack.py \
+    --images data/mnist/train-images-idx3-ubyte \
+    --labels data/mnist/train-labels-idx1-ubyte \
     --out mnist.img
 sudo dd if=mnist.img of=/dev/sdX bs=512 conv=fsync   # a dedicated card
 ```
@@ -288,7 +283,7 @@ ends, never wrapping.
 - Gowin EDA (V1.9.9 or later) for synthesis, place-and-route, and the
   bitstream; the device is GW2A-LV18PG256C8/I7.
 - Icarus Verilog (12.x) for the regression.
-- Python 3 for `tools/mnist_pack.py`.
+- Python 3 for the MNIST tools. `pyserial` is needed only for UART upload.
 - Optional, for the slowest test only: Gowin's `prim_sim.v` primitive
   models and Micron's DDR3 model `src/sim/vendor/README.md` says where
   to put them. The regression skips that test when they are absent.
@@ -303,14 +298,21 @@ iverilog -g2012 -s system_tb -f filelist.f \
 vvp /tmp/system_tb.out
 ```
 
+The MNIST UART sender's host-side validation and serial protocol tests can
+also run by themselves:
+
+```sh
+python3 -m unittest discover -s tools/mnist -p 'test_*.py'
+```
+
 The whole regression:
 
 ```sh
 ./run.sh --no-gui
 ```
 
-Sixteen tests, all green, in a couple of minutes (the DDR3 controller
-test against Micron's model takes the bulk of that). Every test prints
+The regression runs the registered suites, with data-image and vendor-model
+tests skipped when their prerequisites are absent. Every test prints
 `PASS:` or `FAIL:` with its check count; the runner moves the VCD
 waveforms to `src/sim/waveforms/` unless `--no-gui`.
 
@@ -324,6 +326,9 @@ What the tests prove:
 | `system_tb` | bus arbitration, BSRAM store/load |
 | `ddr3_cdc_tb` | the clock crossing under unrelated clocks |
 | `ddr3_target_tb` | the adapter contract, and the write benchmark |
+| `uart_tb` | UART transmit/receive loopback and framing-error rejection |
+| `mnist_uart_loader_tb` | host transfer, DDR word packing, checksum, timeout, and error status |
+| MNIST host tool tests | packed-image validation, status parsing, and partial serial writes |
 | `sd_spi_master_tb` | SPI byte engine, both card speeds |
 | `sd_controller_tb` | the wake-up sequence and every error path |
 | `sd_loader_tb` | the loader against a stalling bus |
@@ -346,7 +351,7 @@ violations on all five clock domains.
 
 ### Controls
 
-- **S1** (`btn_n0`, pin T3) resets the CPU, the microSD path, and the
+- **S1** (`btn_n0`, pin T3) resets the CPU, the selected dataset loader, and the
   video path.
 - **S2** (`btn_n1`, pin T2) pauses the CPU while held the display
   keeps running.
@@ -362,15 +367,14 @@ violations on all five clock domains.
 | led0 | no recent CPU activity | instructions retired recently |
 | led1 | DDR3 write levelling not done | write levelling done |
 | led2 | DDR3 read calibration not done | read calibration done |
-| led3 | the card never answered the wake-up | the card initialised |
-| led4 | the card image is not (yet) in DDR3 | the image loaded |
+| led3 | selected loader is not ready | loader ready or image loaded |
+| led4 | the image is not (yet) in DDR3 | the image loaded |
 | led5 | something failed | nothing failed |
 
 Useful combinations: led1+led2 lit together means DDR3 calibration never
-finished; led3 stuck lit means the card never initialised; led4 lit
-after led3 went out means the load stopped part way. The four-bit error
-codes (`sd_err_code`, `load_err_code`) and the controller's FSM state
-stay in simulation a waveform, or an added debug pin, says *why*.
+finished; with UART selected, led3 staying lit means UART is not ready
+for an upload; led4 lit after led3 goes out means loading is incomplete.
+The loader's FSM and error codes are available in simulation waveforms.
 
 ### Pins
 
@@ -381,6 +385,8 @@ this dock. The slot also has DAT1 (M7), DAT2 (M10), and card detect
 four TMDS pairs: clock on G16/H15, data on H14/H16, J15/K16, K14/K15.
 Three of the SD pins share bank 2 with the DDR3 and run at its 1.5 V
 rail; `sd_miso` sits in a 3.3 V bank.
+The USB-UART bridge is connected on `uart_rx_pin` T13 and
+`uart_tx_pin` M11; UART uses 3.3 V signaling.
 
 The physical assignments, including all of DDR3, are in
 `src/constraints/sipeed_tang_primer_20k.cst`; the clock and generated
@@ -398,17 +404,19 @@ and the OSER10 serialisers); same-clock fabric paths remain timed.
 
 ## First flash: what to expect
 
-1. **led1/led2** go out first DDR3 calibration finished and the reset
+1. **led1/led2** go out when DDR3 calibration finishes and reset is
    released. If they stay lit, the DDR3 clock or PHY never came up.
-2. **A monitor on the HDMI port shows a uniform grey screen** the
+2. **The host sees `R` on the serial port.** Pack an image and run
+   `tools/mnist/mnist_uart_send.py`; it waits for readiness before sending.
+3. **A monitor on the HDMI port shows a uniform grey screen** the
    raster is running, no image fetched yet. This is the first unproven
    link on real hardware; a working grey screen means the PLL, the
    serialisers, and the pin mapping are all alive.
-3. **led3 goes out** when the card answers; **led4** follows when the
-   payload is in DDR3.
-4. **A first MNIST digit appears about a second later** 448x448,
+4. **The host receives `D` and led4 goes out** when the payload is in
+   DDR3. An `E` response includes a binary loader error code.
+5. **A first MNIST digit appears about a second later** 448x448,
    centred and the display then advances one record per second.
-5. **T12/T11 jumpered to ground** double and halve that rate.
+6. **T12/T11 jumpered to ground** double and halve that rate.
 
 If the screen stays grey with the load complete, the display fetch
 chain is not running on hardware check that `view_req` survived
@@ -420,6 +428,8 @@ button path is the tell-tale).
 - The display path has not been shown on a real monitor yet; the HDMI
   backend is the part to watch at bring-up (the serialiser follows the
   vendor primitive guide, but the screen is the judge).
+- The UART path transfers the full training set in roughly 8.5 minutes
+  at 921600 baud; this is a basic, reliable test loader.
 - The microSD path is one bit wide and clocked at 13.5 MHz, so no
   change to the divider can make it faster than about 3.1 MB/s. A 4-bit
   native mode is the next step; 50 MB/s specifically needs 1.8 V SDR50,
@@ -444,8 +454,4 @@ button path is the tell-tale).
 - Sipeed's board examples under `examples/` (HDMI, camera-to-HDMI) the
   TMDS pin mapping and the rPLL/CLKDIV configurations match theirs.
 - The [MNIST database](https://yann.lecun.com/exdb/mnist/) the IDX
-  files `tools/mnist_pack.py` consumes.
-
-
-
-
+  files `tools/mnist/mnist_pack.py` consumes.
