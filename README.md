@@ -2,6 +2,8 @@
 
 CPU-only 32-bit von Neumann system for the Sipeed Tang Primer 20K. CPU instruction and data requests share one bus. Initialized BSRAM provides the boot region, the dock's DDR3 is additional system memory, and a hardware loader fills that memory from a microSD card at boot.
 
+Technical detail and measured performance: [doc/technical_specs.md](doc/technical_specs.md). Naming rules for new code: [doc/NAMING_CONVENTIONS.md](doc/NAMING_CONVENTIONS.md).
+
 ## Architecture
 
 - `cpu.sv` wires the instruction unit, decoder, execution core, register file, and ALU together.
