@@ -35,4 +35,15 @@ src/rtl/cpu/program/cpu_branch.sv
 src/rtl/cpu/program/cpu_program.sv
 src/rtl/cpu/cpu.sv
 src/rtl/soc/system.sv
+src/rtl/util/async_fifo.sv
+src/rtl/util/button_debounce.sv
+src/rtl/video/hdmi/hdmi_rpll.sv
+src/rtl/video/hdmi/hdmi_tmds_encoder.sv
+src/rtl/video/hdmi/hdmi_tmds_serializer.sv
+src/rtl/video/hdmi/hdmi_tx.sv
+src/rtl/video/hdmi/hdmi_timing.sv
+src/rtl/video/mnist/mnist_fetch.sv
+src/rtl/video/mnist/mnist_frame_source.sv
+src/rtl/video/mnist/mnist_rate.sv
+src/rtl/video/mnist/mnist_view_top.sv
 src/rtl/soc/fpga_top.sv

@@ -4,7 +4,8 @@
 module system #(
     parameter INIT_FILE = "src/programs/boot_program.hex",
     parameter bit DDR3_ENABLE = 1'b0,
-    parameter bit SD_ENABLE   = 1'b0
+    parameter bit SD_ENABLE   = 1'b0,
+    parameter bit VIEW_ENABLE = 1'b0
 ) (
     input  logic clk,
     input  logic rst,
@@ -52,7 +53,14 @@ module system #(
     output logic [3:0]  sd_err_code,
     output logic        load_done,
     output logic        load_error,
-    output logic [3:0]  load_err_code
+    output logic [3:0]  load_err_code,
+
+    // A fourth bus client for the display test: the module that moves
+    // one MNIST record from DDR3 into BSRAM per frame tick. Driven
+    // only when VIEW_ENABLE is set; the arbiter slot is the one the
+    // TPU will take later.
+    input  soc_pkg::bus_req_s view_req,
+    output soc_pkg::bus_rsp_s view_rsp
 );
     soc_pkg::bus_req_s instr_req, data_req;
     soc_pkg::bus_rsp_s instr_rsp, data_rsp;
@@ -113,7 +121,18 @@ module system #(
             assign load_err_code = 4'd0;
         end
     endgenerate
-    assign tpu_req = '0;
+
+    // The display test's fetcher, on the arbiter slot the TPU will
+    // inherit. Nothing drives it unless the top does.
+    generate
+        if (VIEW_ENABLE) begin : gen_view
+            assign tpu_req = view_req;
+            assign view_rsp = tpu_rsp;
+        end else begin : gen_no_view
+            assign tpu_req = '0;
+            assign view_rsp = '0;
+        end
+    endgenerate
 
     cpu u_cpu (
         .clk(clk), .rst(rst), .run(run),

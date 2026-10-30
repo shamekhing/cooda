@@ -5,6 +5,23 @@ IO_LOC  "btn_n0" T3;
 IO_PORT "btn_n0" IO_TYPE=LVCMOS15 PULL_MODE=UP BANK_VCCIO=1.5;
 IO_LOC  "btn_n1" T2;
 IO_PORT "btn_n1" IO_TYPE=LVCMOS15 PULL_MODE=UP BANK_VCCIO=1.5;
+// The viewer's rate buttons live on header pins; jumper each to
+// ground for a press (the dock only carries the two tactile ones).
+IO_LOC  "btn_n2" T12;
+IO_PORT "btn_n2" IO_TYPE=LVCMOS15 PULL_MODE=UP BANK_VCCIO=1.5;
+IO_LOC  "btn_n3" T11;
+IO_PORT "btn_n3" IO_TYPE=LVCMOS15 PULL_MODE=UP BANK_VCCIO=1.5;
+
+// HDMI: each TMDS pair is ONE net constrained onto the pair's two
+// pins, the way the Sipeed HDMI example constrains the connector.
+IO_LOC  "tmds_clk" G16,H15;
+IO_PORT "tmds_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
+IO_LOC  "tmds_data[0]" H14,H16;
+IO_PORT "tmds_data[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
+IO_LOC  "tmds_data[1]" J15,K16;
+IO_PORT "tmds_data[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
+IO_LOC  "tmds_data[2]" K14,K15;
+IO_PORT "tmds_data[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
 IO_LOC  "led0" N16;
 IO_PORT "led0" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
 IO_LOC  "led1" N14;
@@ -110,7 +127,8 @@ IO_PORT "DDR3_DM[1]" IO_TYPE=SSTL15 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 IO_PORT "DDR3_DM[0]" IO_TYPE=SSTL15 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 
 // Keep the PLL in the location used by the calibrated upstream PHY.
-INS_LOC "pll/rpll_inst" PLL_L[0];
+// fpga_top wraps the SoC, so the path runs through its instance.
+INS_LOC "u_soc/pll/rpll_inst" PLL_L[0];
 
 // microSD card, SPI mode. These are the pins the dock's slot is wired
 // to (the same mapping LiteX-Boards uses for this board), and they are
@@ -118,11 +136,15 @@ INS_LOC "pll/rpll_inst" PLL_L[0];
 // (M7) and DAT2 (M10) are wired but unused, and D15 is card detect.
 // The whole path runs in the clk27 domain, at 397 kHz while the card
 // wakes up and 13.5 MHz for data, so nothing here needs a new clock.
+// The slot's pins straddle two banks: cs/sck/mosi (N11, N10, R14)
+// share bank 2 with the DDR3, whose SSTL15 pins lock the rail at
+// 1.5 V, while miso (M8) is in a 3.3 V bank. Each pin follows its
+// own bank; the dock handles the level difference.
 IO_LOC  "sd_cs_n" N11;
-IO_PORT "sd_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "sd_cs_n" IO_TYPE=LVCMOS15 PULL_MODE=UP DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC  "sd_sck" N10;
-IO_PORT "sd_sck" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "sd_sck" IO_TYPE=LVCMOS15 PULL_MODE=UP DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC  "sd_mosi" R14;
-IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "sd_mosi" IO_TYPE=LVCMOS15 PULL_MODE=UP DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC  "sd_miso" M8;
 IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
