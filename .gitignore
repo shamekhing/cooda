@@ -11,6 +11,7 @@
 *pnr/
 *_tmp.v
 examples/
+doc/fpga_sheets
 src/sim/build/
 src/sim/waveforms/
 
