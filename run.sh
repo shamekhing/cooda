@@ -13,8 +13,8 @@
 # and Gowin primitive models make every DRAM access expensive.
 # See src/sim/vendor/README.md.
 #
-# Compile order lives in filelist.f. The Gowin project's FileList mirrors
-# it - keep the two in step.
+# Compile order lives in filelist.f. It includes project RTL but omits the
+# protected generated Gowin DDR3 core; the adapter test supplies a model.
 set -e
 
 NO_GUI=0
@@ -86,6 +86,10 @@ run_test "DDR3 CDC" ddr3_cdc_tb ddr3_cdc_sim "" \
 run_test "DDR3 TARGET / WRITE THROUGHPUT" ddr3_target_tb ddr3_target_sim "" \
     -f filelist.f \
     src/sim/testbench/memory/ddr3/ddr3_target_tb.sv
+
+run_test "GOWIN DDR3 ADAPTER" ddr3_gowin_target_tb ddr3_gowin_target_sim "" \
+    -f filelist.f \
+    src/sim/testbench/memory/ddr3/ddr3_gowin_target_tb.sv
 
 run_test "UART BYTE LOOPBACK" uart_tb uart_sim "" \
     -f filelist.f \

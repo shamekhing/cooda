@@ -8,7 +8,7 @@ contains board/vendor reference material.
 
 ```text
 cooda.gprj                 Gowin project and synthesis source list
-filelist.f                 Icarus source order; keep aligned with cooda.gprj
+filelist.f                 Icarus source order for project-owned RTL
 run.sh                     simulation regression runner
 README.md                  project overview, use, and bring-up notes
 doc/                       maintained project documentation

@@ -101,35 +101,33 @@ the system: one `clk27` cycle from request to `ready`.
 
 ### 6.2 DDR3
 
-The DRAM is a 1 Gbit x16 DDR3 at 800 MT/s (400 MHz, both edges), which
-is 1.6 GB/s of raw pin bandwidth. The controller uses its conservative
-DDR3-1066 timing branch at this clock rate; this same-board workaround
-has been reported to resolve calibration failures in the upstream PHY.
-The controller is the vendored
-nand2mario design: it drives Gowin's `DQS`, `OSER8`/`OSER8_MEM` and
-`IDES8_MEM` PHY primitives, runs the command path at `pclk`, and does
-power-up init, ZQ calibration, write levelling and read calibration
-before it accepts traffic; the adapter holds requests until then.
+The active `ddrip` branch uses the Gowin DDR3 IP configuration from the
+same-board `TP20kExample/DDR-test` project: GW2A-18C, x16 DDR3, a nominal
+400 MHz memory clock, and a 1:4 controller ratio. The existing PLL
+provides 398.25 MHz; the IP supplies the approximately 99.56 MHz
+application clock and `init_calib_complete`. Its controller owns
+initialization, PHY calibration, and refresh. User refresh requests are
+disabled, as in the example.
 
-The client interface is one 16-bit halfword per command, one command
-at a time. From the controller's own timing diagram:
+The old `ddr3_controller` path remains in the source tree and its
+`memory_ddr3` adapter remains covered by `ddr3_target_tb`, but it is no
+longer instantiated by the DDR-enabled SoC. The two paths differ:
 
-| Operation | Cost | Rate |
+| | COODA manual controller | Gowin example/IP path |
 | --- | --- | --- |
-| 16-bit read | 9 `pclk` cycles | about 22-25 MB/s |
-| 16-bit write | about 24 `pclk` cycles (a BC4 burst masks three of its four halfwords) | about 8-9 MB/s |
+| PHY/control | Vendored PHY primitives and hand-written init/calibration | Gowin DDR3 IP and generated PHY |
+| App data width | 16-bit halfword commands | 128-bit app transfers |
+| Refresh | COODA schedules explicit refreshes | IP manages refresh |
+| Bus mapping | One 32-bit word becomes two halfword commands | One 32-bit word maps to one 128-bit burst, with a 16-byte mask enabling only the addressed four bytes |
+| Readiness | `write_level_done` and `read_calib_done` from manual controller | `init_calib_complete` from IP |
 
-One 32-bit bus write therefore becomes two serial 16-bit commands, and
-the adapter's clock crossing adds a round-trip. `ddr3_target_tb`
-measures the pair end to end: **7.19 MiB/s** of sequential 32-bit
-writes (962 `clk27` cycles for 64 words), *measured against a
-behavioral controller*, so it covers RTL transaction overhead and says
-nothing about PHY or DRAM timing.
-
-Widening this path is the cheapest speed-up in the system: batching
-two adjacent bus words into one BC4 burst would roughly halve the
-write cost, and a 4-bit or 8-bit client interface would raise it
-further. Nothing here bounds the *read* side below about 22 MB/s.
+`memory_ddr3_gowin` keeps the same 32-bit SoC bus contract and clock
+crossing, stalls accesses during IP calibration, and reports a timeout
+or invalid access as a bus error. `ddr3_gowin_target_tb` checks
+calibration waiting, burst/lane/mask mapping, read-back, invalid
+requests, and the app-interface timeout against a behavioral IP model.
+Neither adapter simulation is proof of physical DDR operation; only
+programming and testing the board can establish that.
 
 ## 7. microSD path
 
@@ -259,11 +257,12 @@ generated IP, so it both simulates under Icarus and commits.
 | microSD | N11, N10, R14, M8 | SPI mode |
 | UART | T13, M11 | USB-UART RX, TX |
 
-Physical LEDs are active low, but the board RTL complements these status
-signals: a lit led0 indicates CPU activity, lit led1/led2 indicate DDR3
-write leveling/read calibration complete, lit led3 indicates the selected
-loader is ready, lit led4 indicates the image is in DDR3, and lit led5
-indicates an error is asserted. The four-bit error codes are on `system`'s
+Physical LEDs are active low. The board RTL drives active-low indications:
+lit led0 means the DDR PLL is unlocked; lit led1 means DDR calibration is
+incomplete; lit led2 means a DDR bus error was recorded; lit led3 means the
+Gowin app engine is active; lit led4 means the image has loaded; and lit led5
+means the app engine is in its read state. A dark led2 means no
+sticky bus error has been recorded. The four-bit error codes are on `system`'s
 ports, not on pins.
 
 ## 10. Implementation results
@@ -291,6 +290,7 @@ From the Gowin synthesis and place-and-route reports in `impl/` (the
 | `system_tb` | bus arbitration, BSRAM store/load |
 | `ddr3_cdc_tb` | the clock crossing under unrelated clocks |
 | `ddr3_target_tb` | the adapter contract, and the write benchmark |
+| `ddr3_gowin_target_tb` | Gowin app-interface lane mapping, masks, calibration wait, and timeout |
 | `uart_tb` | UART byte loopback and framing-error rejection |
 | `mnist_uart_loader_tb` | UART image upload, DDR word packing, checksum, timeout, and error status |
 | `sd_spi_master_tb` | SPI byte engine, both card speeds (619 checks) |

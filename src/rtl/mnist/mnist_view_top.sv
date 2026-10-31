@@ -41,12 +41,14 @@ module mnist_view_top #(
     input  logic btn_n3,
     inout  wire [15:0] DDR3_DQ,
     inout  wire [1:0]  DDR3_DQS,
-    output wire [12:0] DDR3_A,
+    inout  wire [1:0]  DDR3_DQS_N,
+    output wire [13:0] DDR3_A,
     output wire [2:0]  DDR3_BA,
     output wire        DDR3_nRAS,
     output wire        DDR3_nCAS,
     output wire        DDR3_nWE,
     output wire        DDR3_CK,
+    output wire        DDR3_CK_N,
     output wire        DDR3_CKE,
     output wire        DDR3_nRESET,
     output wire [1:0]  DDR3_DM,
@@ -82,7 +84,7 @@ module mnist_view_top #(
     logic [1:0] sd_card_type;
     logic [3:0] sd_err_code, load_err_code;
     logic [19:0] activity_count;
-    logic ddr_pclk, ddr_fclk, ddr_ck, ddr_pll_lock;
+    logic ddr_pclk, ddr_fclk, ddr_pll_lock;
     logic ddr_reset_async;
     logic ddr_rst;
     logic [1:0] ddr_rst_sync = 2'b11;
@@ -106,7 +108,7 @@ module mnist_view_top #(
     // ---------------- DDR3 clocks, as fpga_top brings them up --------
     ddr3_pll pll (
         .clkin(clk27), .pclk(ddr_pclk), .fclk(ddr_fclk),
-        .ck(ddr_ck), .lock(ddr_pll_lock)
+        .ck(), .lock(ddr_pll_lock)
     );
 
     assign ddr_reset_async = rst;
@@ -206,12 +208,14 @@ module mnist_view_top #(
         .UART_ENABLE(UART_ENABLE), .UART_BAUD_RATE(UART_BAUD_RATE)
     ) u_system (
         .clk(clk27), .rst(rst), .run(run),
-        .ddr_pclk(ddr_pclk), .ddr_fclk(ddr_fclk), .ddr_ck(ddr_ck),
+        .ddr_fclk(ddr_fclk), .ddr_pll_lock(ddr_pll_lock),
         .ddr_rst(ddr_rst),
         .DDR3_DQ(DDR3_DQ), .DDR3_DQS(DDR3_DQS),
+        .DDR3_DQS_N(DDR3_DQS_N),
         .DDR3_A(DDR3_A), .DDR3_BA(DDR3_BA),
         .DDR3_nRAS(DDR3_nRAS), .DDR3_nCAS(DDR3_nCAS),
         .DDR3_nWE(DDR3_nWE), .DDR3_CK(DDR3_CK),
+        .DDR3_CK_N(DDR3_CK_N),
         .DDR3_CKE(DDR3_CKE), .DDR3_nRESET(DDR3_nRESET),
         .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT),
         .retire_valid(retire_valid),
@@ -239,18 +243,12 @@ module mnist_view_top #(
         else if (activity_count != '0) activity_count <= activity_count - 1'b1;
     end
 
-    // LED0/1 are a fixed high/low polarity check; LEDs 2-5 expose the
-    // DDR controller state. Decode the state after observing which of
-    // LEDs 0 and 1 lights on the board.
-    assign led0 = 1'b1;
-    assign led1 = 1'b0;
     assign dataset_loaded = UART_ENABLE ? uart_load_done : load_done;
-    assign led2 = ddr_debug_status[7:0] == 8'd8
-        ? ddr_debug_status[14] : ddr_debug_status[0];
-    assign led3 = ddr_debug_status[7:0] == 8'd8
-        ? ddr_debug_status[15] : ddr_debug_status[1];
-    assign led4 = ddr_debug_status[7:0] == 8'd8
-        ? ddr_debug_status[16] : ddr_debug_status[2];
-    assign led5 = ddr_debug_status[3];
+    assign led0 = ddr_pll_lock;
+    assign led1 = ddr_write_level_done;
+    assign led2 = !ddr_err;
+    assign led3 = (ddr_debug_status[2:0] == 3'd0);
+    assign led4 = !dataset_loaded;
+    assign led5 = (ddr_debug_status[2:0] != 3'd2);
 
 endmodule

@@ -14,18 +14,19 @@ module system #(
     input  logic run,
 
     // DDR3 clocks/reset come from the board wrapper.
-    input  logic ddr_pclk,
     input  logic ddr_fclk,
-    input  logic ddr_ck,
+    input  logic ddr_pll_lock,
     input  logic ddr_rst,
     inout  wire [15:0] DDR3_DQ,
     inout  wire [1:0]  DDR3_DQS,
-    output wire [12:0] DDR3_A,
+    inout  wire [1:0]  DDR3_DQS_N,
+    output wire [13:0] DDR3_A,
     output wire [2:0]  DDR3_BA,
     output wire        DDR3_nRAS,
     output wire        DDR3_nCAS,
     output wire        DDR3_nWE,
     output wire        DDR3_CK,
+    output wire        DDR3_CK_N,
     output wire        DDR3_CKE,
     output wire        DDR3_nRESET,
     output wire [1:0]  DDR3_DM,
@@ -81,14 +82,7 @@ module system #(
     wire soc_pkg::bus_rsp_s ddr_rsp;
     soc_pkg::bus_rsp_s ddr_target_rsp;
 
-    logic ctl_rd, ctl_wr, ctl_refresh;
-    logic [25:0] ctl_addr;
-    logic [15:0] ctl_din, ctl_dout;
-    logic ctl_busy, ctl_data_ready;
     logic write_level_done, read_calib_done;
-    logic [7:0] wstep;
-    logic [1:0] rclkpos;
-    logic [2:0] rclksel;
     logic [63:0] ddr_debug;
 
     // The selected dataset loader is a boot-time bus master on arbiter
@@ -213,39 +207,34 @@ module system #(
 
     generate
         if (DDR3_ENABLE) begin : gen_ddr3
-            memory_ddr3 u_ddr3_memory (
+            memory_ddr3_gowin u_ddr3_memory (
                 .clk(clk), .rst(rst), .target_req(ddr_req),
                 .target_rsp(ddr_target_rsp),
-                .clk_ddr(ddr_pclk), .rst_ddr(ddr_rst),
-                .ctl_rd(ctl_rd), .ctl_wr(ctl_wr), .ctl_refresh(ctl_refresh),
-                .ctl_addr(ctl_addr), .ctl_din(ctl_din), .ctl_dout(ctl_dout),
-                .ctl_busy(ctl_busy), .ctl_data_ready(ctl_data_ready),
-                .ctl_ready(write_level_done && read_calib_done),
+                .ddr_fclk(ddr_fclk), .ddr_pll_lock(ddr_pll_lock),
+                .ddr_rst(ddr_rst),
+                .ready(ddr_ready),
                 .err_sticky(ddr_err),
-                .ready(ddr_ready)
-            );
-
-            ddr3_controller u_ddr3_controller (
+                .debug_status(ddr_debug),
                 .DDR3_DQ(DDR3_DQ), .DDR3_DQS(DDR3_DQS),
+                .DDR3_DQS_N(DDR3_DQS_N),
                 .DDR3_A(DDR3_A), .DDR3_BA(DDR3_BA),
                 .DDR3_nRAS(DDR3_nRAS), .DDR3_nCAS(DDR3_nCAS),
-                .DDR3_nWE(DDR3_nWE), .DDR3_nCS(), .DDR3_CK(DDR3_CK),
+                .DDR3_nWE(DDR3_nWE), .DDR3_CK(DDR3_CK),
+                .DDR3_CK_N(DDR3_CK_N),
                 .DDR3_CKE(DDR3_CKE), .DDR3_nRESET(DDR3_nRESET),
-                .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT),
-                .pclk(ddr_pclk), .fclk(ddr_fclk), .ck(ddr_ck),
-                .resetn(!ddr_rst), .rd(ctl_rd), .wr(ctl_wr),
-                .refresh(ctl_refresh), .addr(ctl_addr), .din(ctl_din),
-                .dout(ctl_dout), .dout128(), .data_ready(ctl_data_ready),
-                .busy(ctl_busy), .write_level_done(write_level_done),
-                .wstep(wstep), .read_calib_done(read_calib_done),
-                .rclkpos(rclkpos), .rclksel(rclksel), .debug(ddr_debug)
+                .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT)
             );
+
+            assign write_level_done = ddr_ready;
+            assign read_calib_done = ddr_ready;
         end else begin : gen_no_ddr3
             assign ddr_rsp = {ddr_req.valid, arch_pkg::word_t'(0), ddr_req.valid};
             assign {DDR3_A, DDR3_BA, DDR3_nRAS, DDR3_nCAS, DDR3_nWE,
-                    DDR3_CK, DDR3_CKE, DDR3_nRESET, DDR3_DM, DDR3_ODT} = '0;
+                    DDR3_CK, DDR3_CK_N, DDR3_CKE, DDR3_nRESET,
+                    DDR3_DM, DDR3_ODT} = '0;
             assign DDR3_DQ  = 'z;
             assign DDR3_DQS = 'z;
+            assign DDR3_DQS_N = 'z;
             assign write_level_done = 1'b0;
             assign read_calib_done  = 1'b0;
             assign ddr_err          = 1'b0;

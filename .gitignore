@@ -24,3 +24,4 @@ data/
 
 src/sim/vendor/ddr3/
 src/sim/vendor/prim_sim.v
+src/rtl/memory/ddr3/gowin/ddr3_memory_interface.v

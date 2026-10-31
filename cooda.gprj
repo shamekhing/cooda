@@ -24,9 +24,11 @@
         <File path="src/rtl/memory/ddr3/ddr3_cdc.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/ddr3/ddr3_controller.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/ddr3/ddr3_pll.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/ddr3/gowin/ddr3_memory_interface.v" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory_bsram.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory_ddr3.sv" type="file.verilog" enable="1"/>
+        <File path="src/rtl/memory/memory_ddr3_gowin.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/memory_sd.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/sd/sd_controller.sv" type="file.verilog" enable="1"/>
         <File path="src/rtl/memory/sd/sd_loader.sv" type="file.verilog" enable="1"/>

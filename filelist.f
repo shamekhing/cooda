@@ -17,6 +17,7 @@ src/rtl/memory/sd/sd_loader.sv
 src/rtl/memory/memory_bsram.sv
 src/rtl/memory/memory.sv
 src/rtl/memory/memory_ddr3.sv
+src/rtl/memory/memory_ddr3_gowin.sv
 src/rtl/memory/memory_sd.sv
 src/rtl/uart/uart_rx.sv
 src/rtl/uart/uart_tx.sv
