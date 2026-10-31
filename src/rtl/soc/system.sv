@@ -40,6 +40,7 @@ module system #(
     output logic ddr_write_level_done,
     output logic ddr_read_calib_done,
     output logic ddr_err,
+    output logic [63:0] ddr_debug_status,
 
     // microSD card pins. Idle when SD_ENABLE is 0.
     output logic sd_cs_n,
@@ -249,6 +250,7 @@ module system #(
             assign read_calib_done  = 1'b0;
             assign ddr_err          = 1'b0;
             assign ddr_ready        = 1'b0;
+            assign ddr_debug        = '0;
         end
         if (DDR3_ENABLE) begin : gen_ddr3_response
             assign ddr_rsp = ddr_target_rsp;
@@ -257,4 +259,5 @@ module system #(
 
     assign ddr_write_level_done = write_level_done;
     assign ddr_read_calib_done  = read_calib_done;
+    assign ddr_debug_status     = ddr_debug;
 endmodule

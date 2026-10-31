@@ -195,7 +195,8 @@ typedef logic [4:0] FIVEB;
 // Debug stuff
 reg [7:0] cnt_read = 0;
 reg [7:0] cnt_write = 0;
-assign debug = {cnt_write, cnt_read, BYTE'(state)};
+assign debug = {cnt_write, cnt_read, wstep, DDR3_DQ[8], DDR3_DQ[0],
+                6'b0, BYTE'(state)};
 
 // Output signals
 reg nRAS[3:0], nCAS[3:0], nWE[3:0];

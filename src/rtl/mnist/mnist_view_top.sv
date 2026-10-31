@@ -57,8 +57,10 @@ module mnist_view_top #(
     input  wire        sd_miso,
     input  wire        uart_rx_pin,
     output wire        uart_tx_pin,
-    output wire        tmds_clk,
-    output wire [2:0]  tmds_data,
+    output wire        tmds_clk_p,
+    output wire        tmds_clk_n,
+    output wire [2:0]  tmds_data_p,
+    output wire [2:0]  tmds_data_n,
     output logic led0,
     output logic led1,
     output logic led2,
@@ -73,6 +75,7 @@ module mnist_view_top #(
     logic rst, user_rst, run;
     logic retire_valid, illegal_instr, cpu_fault;
     logic ddr_write_level_done, ddr_read_calib_done, ddr_err;
+    logic [63:0] ddr_debug_status;
     logic sd_ready, sd_error, load_done, load_error;
     logic uart_ready, uart_load_done, uart_load_error, ddr_ready;
     logic dataset_loaded;
@@ -188,14 +191,13 @@ module mnist_view_top #(
         .rgb_r(rgb_r), .rgb_g(rgb_g), .rgb_b(rgb_b), .rgb_de(rgb_de)
     );
 
-    // The four TMDS pairs are single-ended nets here; the .cst maps
-    // each onto the two pins of the board's differential pair, which is
-    // how the HDMI example constrains the same connector.
+    // The serializer lanes are converted to true LVDS pairs for HDMI.
     hdmi_tx u_hdmi_tx (
         .pix_clk(pix_clk), .serial_clk(serial_clk), .rst(video_rst),
         .de(rgb_de), .hs(video_hs), .vs(video_vs),
         .r(rgb_r), .g(rgb_g), .b(rgb_b),
-        .tmds_clk(tmds_clk), .tmds_data(tmds_data)
+        .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n),
+        .tmds_data_p(tmds_data_p), .tmds_data_n(tmds_data_n)
     );
 
     // ---------------- the SoC -----------------------------------------
@@ -217,6 +219,7 @@ module mnist_view_top #(
         .ddr_write_level_done(ddr_write_level_done),
         .ddr_read_calib_done(ddr_read_calib_done),
         .ddr_err(ddr_err),
+        .ddr_debug_status(ddr_debug_status),
         .sd_cs_n(sd_cs_n), .sd_sck(sd_sck),
         .sd_mosi(sd_mosi), .sd_miso(sd_miso),
         .uart_rx_pin(uart_rx_pin), .uart_tx_pin(uart_tx_pin),
@@ -236,12 +239,18 @@ module mnist_view_top #(
         else if (activity_count != '0) activity_count <= activity_count - 1'b1;
     end
 
-    assign led0 = (activity_count == '0);
-    assign led1 = ~ddr_write_level_done;
-    assign led2 = ~ddr_read_calib_done;
+    // LED0/1 are a fixed high/low polarity check; LEDs 2-5 expose the
+    // DDR controller state. Decode the state after observing which of
+    // LEDs 0 and 1 lights on the board.
+    assign led0 = 1'b1;
+    assign led1 = 1'b0;
     assign dataset_loaded = UART_ENABLE ? uart_load_done : load_done;
-    assign led3 = UART_ENABLE ? ~(uart_ready | uart_load_done) : ~sd_ready;
-    assign led4 = ~(dataset_loaded | fetch_tick);
-    assign led5 = ~(ddr_err | sd_error | load_error | uart_load_error);
+    assign led2 = ddr_debug_status[7:0] == 8'd8
+        ? ddr_debug_status[14] : ddr_debug_status[0];
+    assign led3 = ddr_debug_status[7:0] == 8'd8
+        ? ddr_debug_status[15] : ddr_debug_status[1];
+    assign led4 = ddr_debug_status[7:0] == 8'd8
+        ? ddr_debug_status[16] : ddr_debug_status[2];
+    assign led5 = ddr_debug_status[3];
 
 endmodule

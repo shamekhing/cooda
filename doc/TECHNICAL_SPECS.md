@@ -29,7 +29,7 @@ not instantiated.
 | --- | --- | --- |
 | `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, UART, microSD, image fetch |
 | `pclk` | 99.563 MHz | DDR3 controller command/data path |
-| `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serialiser (DDR3-800) |
+| `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serializer (800 MT/s DDR3) |
 | `serial_clk` | 371.25 MHz | HDMI TMDS serialiser (5x the bit pairs) |
 | `pix_clk` | 74.250 MHz | raster, TMDS encoders, frame source |
 
@@ -101,8 +101,11 @@ the system: one `clk27` cycle from request to `ready`.
 
 ### 6.2 DDR3
 
-The DRAM is a 1 Gbit x16 DDR3 at DDR3-800 (400 MHz, both edges), which
-is 1.6 GB/s of raw pin bandwidth. The controller is the vendored
+The DRAM is a 1 Gbit x16 DDR3 at 800 MT/s (400 MHz, both edges), which
+is 1.6 GB/s of raw pin bandwidth. The controller uses its conservative
+DDR3-1066 timing branch at this clock rate; this same-board workaround
+has been reported to resolve calibration failures in the upstream PHY.
+The controller is the vendored
 nand2mario design: it drives Gowin's `DQS`, `OSER8`/`OSER8_MEM` and
 `IDES8_MEM` PHY primitives, runs the command path at `pclk`, and does
 power-up init, ZQ calibration, write levelling and read calibration
@@ -224,8 +227,9 @@ in `mnist_view_top`, which wraps the SoC and adds the video half:
 4. `hdmi_tx` serialises TMDS: three `hdmi_tmds_encoder`s (8b/10b DVI
    encoding with running disparity) and four `hdmi_tmds_serializer`s
    (Gowin's OSER10 hard macro, 10:1), plus the clock channel's
-   1111100000 pattern. Each pair leaves the chip as one net that the
-   `.cst` maps onto the two pins of the board's differential pair.
+   1111100000 pattern. A Gowin `TLVDS_OBUF` drives each true
+   differential output pair; the `.cst` assigns `LVDS25` and the
+   positive-side pin locations.
 
 Rate control (`mnist_rate`): the rate is `MAX_RATE >> rate_step` - a
 divisor of the refresh rate, so no setting can outrun the screen. The
@@ -239,8 +243,8 @@ two buttons step the exponent and hold at the ends, never wrapping:
 buttons, so the rate buttons sit on header pins T12 and T11 - jumper
 each to ground for a press.
 
-The HDMI backend is pure RTL plus Gowin hard macros (rPLL, CLKDIV,
-OSER10 - the same primitives the DDR3 PHY uses). It needs no IDE
+The HDMI backend is RTL plus Gowin hard macros (rPLL, CLKDIV, OSER10,
+and TLVDS_OBUF - the same primitive library used by the DDR3 PHY). It needs no IDE
 generated IP, so it both simulates under Icarus and commits.
 
 ## 9. Board I/O
@@ -250,15 +254,17 @@ generated IP, so it both simulates under Icarus and commits.
 | `clk27` | H11 | 27 MHz |
 | `btn_n0` | T3 | reset (CPU, selected loader, and video) |
 | `btn_n1` | T2 | run / pause |
-| `led0..led5` | N16, N14, L14, L16, C13, A13 | active low |
+| `led0..led5` | P15, N15, N14, L14, R16, P16 | active low, board indices 0..5 |
 | DDR3 | A/B/J/G/K/R/L/P/M/F/C/E columns | SSTL15, see the `.cst` |
 | microSD | N11, N10, R14, M8 | SPI mode |
 | UART | T13, M11 | USB-UART RX, TX |
 
-LED meaning, active low: led0 CPU activity, led1 DDR3 write levelling
-done, led2 DDR3 read calibration done, led3 the selected loader is ready,
-led4 the image is in DDR3, led5 nothing failed. The four-bit error
-codes are on `system`'s ports, not on pins.
+Physical LEDs are active low, but the board RTL complements these status
+signals: a lit led0 indicates CPU activity, lit led1/led2 indicate DDR3
+write leveling/read calibration complete, lit led3 indicates the selected
+loader is ready, lit led4 indicates the image is in DDR3, and lit led5
+indicates an error is asserted. The four-bit error codes are on `system`'s
+ports, not on pins.
 
 ## 10. Implementation results
 

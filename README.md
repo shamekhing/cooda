@@ -2,8 +2,8 @@
 
 A 32-bit von Neumann computer on the Sipeed Tang Primer 20K (Gowin
 GW2A-LV18PG256C8/I7), built from scratch in SystemVerilog. It boots from
-on-chip BSRAM, fills its 128 MiB DDR3 from a PC over UART (or a microSD
-card) with no CPU program involved, and shows the dataset
+on-chip BSRAM, fills its 128 MiB DDR3 from a PC over UART by default
+(or a microSD card) with no CPU program involved, and shows the dataset
 it loaded on an HDMI monitor: one MNIST digit at a time, upscaled and
 centred, at a rate you set with buttons.
 
@@ -16,7 +16,7 @@ synthesizes with Gowin and simulates with Icarus.
 | --- | --- |
 | CPU | 32-bit, von Neumann, byte-addressed bus |
 | Boot memory | 32 KiB on-chip BSRAM, initialised from hex |
-| Main memory | 128 MiB DDR3 at 0x0800_0000 (DDR3-800, 16-bit) |
+| Main memory | 128 MiB DDR3 at 0x0800_0000 (800 MT/s, 16-bit; conservative timing profile) |
 | Dataset input | PC UART upload by default; microSD SPI alternative |
 | Display | HDMI 720p60, TMDS, 448x448 MNIST patch, 1..60 images/s |
 | Toolchain | Gowin EDA (synthesis + P&R), Icarus Verilog (simulation) |
@@ -35,8 +35,8 @@ PC-to-FPGA dataset upload: [doc/MNIST_QUICK_START.md](doc/MNIST_QUICK_START.md).
 | DDR3 controller + PHY | synthesis and P&R close timing; verified against Micron's model in simulation |
 | UART MNIST loader | simulation-verified header, DDR writes, checksum, and errors; hardware transfer pending |
 | microSD loader | verified byte for byte against a real packer image in simulation |
-| HDMI display path | verified end to end in simulation (pixel-exact); not yet shown on a physical monitor |
-| Hardware bring-up | UART transfer and HDMI output still need board verification |
+| HDMI display path | pixel pipeline verified in simulation; differential output and physical monitor still need hardware verification |
+| Hardware bring-up | SD/UART transfer and HDMI output still need board verification |
 
 ## Repository layout
 
@@ -64,15 +64,15 @@ in `src/sim/testbench/uart/`; MNIST tests are in `src/sim/testbench/mnist/`.
   byte-write-enabled `memory_bsram`.
 - `memory_ddr3.sv` adapts the system bus to the DDR3 controller,
   including clock-domain crossing, refresh, and calibration gating.
-- `memory_sd.sv` wraps the microSD path (`sd_spi_master.sv`,
+- `memory_sd.sv` wraps the optional microSD path (`sd_spi_master.sv`,
   `sd_controller.sv`, `sd_loader.sv` under `memory/sd/`) and is what
-  `system.sv` instantiates when `SD_ENABLE` is set. It loads a card
+  `system.sv` instantiates when `SD_ENABLE` is set. The default board build
+  uses UART; the SD alternative loads a card
   image into DDR3 at boot with no CPU program involved.
 - `mnist_uart_loader.sv` receives the same packed image format over the
-  board USB-UART bridge and writes its payload to DDR3. The generic UART
-  byte engines live in `src/rtl/uart/`; MNIST-specific logic lives in
-  `src/rtl/mnist/`. UART is enabled by default in the board viewer; UART
-  and SD are mutually exclusive loader builds.
+  board USB-UART bridge and writes its payload to DDR3. The generic UART byte engines live in
+  `src/rtl/uart/`; MNIST-specific logic lives in `src/rtl/mnist/`. SD
+  and UART are mutually exclusive loader builds.
 - `system.sv` maps BSRAM at `0x0000_0000..0x0000_7fff` and 128 MiB DDR3
   at `0x0800_0000..0x0fff_ffff`. The BSRAM region remains the reset/boot
   region.
@@ -108,7 +108,7 @@ primitives and is intended for the Tang Primer 20K dock.
 | --- | --- | --- |
 | `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, UART, microSD, image fetch |
 | `pclk` | 99.563 MHz | DDR3 controller command/data path |
-| `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serialiser (DDR3-800) |
+| `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serializer (800 MT/s DDR3) |
 | `serial_clk` | 371.25 MHz | HDMI TMDS serialiser |
 | `pix_clk` | 74.25 MHz | raster, TMDS encoders, frame source |
 
@@ -127,15 +127,14 @@ commands, status codes, and troubleshooting—is in
 training set is about 47.1 MB and takes approximately 8.5 minutes at
 921600 baud, excluding host and USB-UART overhead.
 
-Set `UART_ENABLE=0` and `SD_ENABLE=1` in the board top parameters to
-build the microSD alternative. The two loaders share one bus slot and
-must not be enabled together.
+To build the microSD alternative, set `UART_ENABLE=0` and `SD_ENABLE=1`
+in both `fpga_top` and `mnist_view_top`. The two loaders share one bus
+slot and must not be enabled together.
 
-## Getting data in: the microSD path (alternate)
+## Getting data in: the microSD path
 
 The core board's microSD slot (on the SODIMM module itself) is wired to
-the FPGA in SPI mode. This is the alternate hardware loader when the
-board build selects `SD_ENABLE`.
+the FPGA in SPI mode. This is an optional alternative to UART.
 
 - `sd_spi_master.sv` clocks bytes on the four card pins (SPI mode 0),
   full duplex, with a divider the protocol layer rewrites between phases.
@@ -254,12 +253,12 @@ and adds the video half:
 3. `hdmi_timing` generates the 720p60 raster (CEA-861) and a one-cycle
    `vblank_start` pulse marking the drain window.
 4. `hdmi_tx` serialises TMDS: three `hdmi_tmds_encoder`s (DVI 8b/10b
-   encoding with running disparity) and four `hdmi_tmds_serializer`s
-   (Gowin's OSER10 hard macro, 10:1), plus the clock channel's fixed
-   1111100000 pattern. Each pair leaves the chip as one net that the
-   `.cst` maps onto the two pins of the board's differential pair.
+   encoding with running disparity), four `hdmi_tmds_serializer`s
+   (Gowin's OSER10 hard macro, 10:1), and a `TLVDS_OBUF` on each lane
+   to drive the connector's differential clock/data pairs. The `.cst`
+   constrains each positive output as `LVDS25` on the board's paired pins.
 
-The backend is pure RTL plus Gowin hard macros (rPLL, CLKDIV, OSER10 —
+The backend is RTL plus Gowin hard macros (rPLL, CLKDIV, OSER10, TLVDS_OBUF —
 the same primitives the DDR3 PHY uses). No IDE-generated IP is
 involved, so the same files synthesize and simulate.
 
@@ -360,21 +359,22 @@ violations on all five clock domains.
   ground for a press. The dock only carries the two tactile buttons, so
   the viewer's buttons live on headers.
 
-### Status LEDs (active low: lit means the condition is false)
+### DDR bring-up LEDs
 
-| LED | Lit means | Out means |
-| --- | --- | --- |
-| led0 | no recent CPU activity | instructions retired recently |
-| led1 | DDR3 write levelling not done | write levelling done |
-| led2 | DDR3 read calibration not done | read calibration done |
-| led3 | selected loader is not ready | loader ready or image loaded |
-| led4 | the image is not (yet) in DDR3 | the image loaded |
-| led5 | something failed | nothing failed |
+The six LEDs temporarily expose DDR calibration status. LEDs 0 and 1
+are a polarity check: the RTL drives led0 high and led1 low. The one
+that lights identifies the board LED polarity. LEDs 2-5 expose the
+controller state; decode them as binary, least-significant bit on led2,
+using the observed polarity (direct for active-high LEDs, complemented
+for active-low LEDs).
 
-Useful combinations: led1+led2 lit together means DDR3 calibration never
-finished; with UART selected, led3 staying lit means UART is not ready
-for an upload; led4 lit after led3 goes out means loading is incomplete.
-The loader's FSM and error codes are available in simulation waveforms.
+Controller states are `0` reset wait, `1` CKE wait, `2` mode-register
+configuration, `3` ZQ calibration, `4` idle, `5` read, `6` write,
+`7` refresh, `8` write leveling, and `9` read calibration. While state
+8 is active, led2, led3, and led4 instead report DDR DQ[0], DQ[8], and
+the least-significant write-level delay bit; led5 marks write leveling.
+This diagnostic mapping replaces the normal loader and CPU status
+indicators until DDR bring-up is resolved.
 
 ### Pins
 
@@ -386,7 +386,9 @@ four TMDS pairs: clock on G16/H15, data on H14/H16, J15/K16, K14/K15.
 Three of the SD pins share bank 2 with the DDR3 and run at its 1.5 V
 rail; `sd_miso` sits in a 3.3 V bank.
 The USB-UART bridge is connected on `uart_rx_pin` T13 and
-`uart_tx_pin` M11; UART uses 3.3 V signaling.
+`uart_tx_pin` M11. These FPGA pins are in a 1.5 V bank shared with
+DDR3 and use the LVCMOS15 I/O standard; any external UART adapter must
+be level-compatible with that bank.
 
 The physical assignments, including all of DDR3, are in
 `src/constraints/sipeed_tang_primer_20k.cst`; the clock and generated
@@ -404,19 +406,24 @@ and the OSER10 serialisers); same-clock fabric paths remain timed.
 
 ## First flash: what to expect
 
-1. **led1/led2** go out when DDR3 calibration finishes and reset is
-   released. If they stay lit, the DDR3 clock or PHY never came up.
-2. **The host sees `R` on the serial port.** Pack an image and run
+1. **led1/led2** light when DDR3 calibration finishes and reset is
+   released. If they remain off, the DDR3 clock or PHY did not come up.
+2. With the default UART build, **the host sees `R` on the serial port**.
+   Pack an image and run
    `tools/mnist/mnist_uart_send.py`; it waits for readiness before sending.
-3. **A monitor on the HDMI port shows a uniform grey screen** the
+   In an SD build, led3 lights when the card protocol is ready, and the
+   card must contain a raw packed image starting at LBA 0; a filesystem
+   containing an `.img` file is not sufficient.
+4. **A monitor on the HDMI port shows a uniform grey screen** the
    raster is running, no image fetched yet. This is the first unproven
    link on real hardware; a working grey screen means the PLL, the
    serialisers, and the pin mapping are all alive.
-4. **The host receives `D` and led4 goes out** when the payload is in
-   DDR3. An `E` response includes a binary loader error code.
-5. **A first MNIST digit appears about a second later** 448x448,
+5. **led4 lights and stays lit** when the payload is in DDR3. In a UART build, the
+   host receives `D` at that point; an `E` response includes a binary
+   loader error code.
+6. **A first MNIST digit appears about a second later** 448x448,
    centred and the display then advances one record per second.
-6. **T12/T11 jumpered to ground** double and halve that rate.
+7. **T12/T11 jumpered to ground** double and halve that rate.
 
 If the screen stays grey with the load complete, the display fetch
 chain is not running on hardware check that `view_req` survived
@@ -425,9 +432,9 @@ button path is the tell-tale).
 
 ## Known limits
 
-- The display path has not been shown on a real monitor yet; the HDMI
-  backend is the part to watch at bring-up (the serialiser follows the
-  vendor primitive guide, but the screen is the judge).
+- The HDMI output has not been shown on a real monitor yet. Simulation
+  verifies the pixel pipeline, not the physical LVDS output or monitor
+  compatibility.
 - The UART path transfers the full training set in roughly 8.5 minutes
   at 921600 baud; this is a basic, reliable test loader.
 - The microSD path is one bit wide and clocked at 13.5 MHz, so no

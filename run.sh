@@ -121,6 +121,11 @@ run_test "MNIST VIEW END TO END" mnist_view_tb mnist_view_sim "" \
     -f filelist.f \
     src/sim/testbench/mnist/mnist_view_tb.sv
 
+run_test "HDMI DIFFERENTIAL OUTPUTS" hdmi_tx_tb hdmi_tx_sim "" \
+    -f filelist.f \
+    src/sim/testbench/video/hdmi_tx_tb.sv \
+    src/sim/vendor/prim_sim.v
+
 # The end-to-end test needs a card image, which comes from the MNIST IDX
 # files in data/mnist. Build a small one from them and check that every
 # byte of it arrives; skip both steps when the data is not installed.

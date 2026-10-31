@@ -34,8 +34,10 @@ module fpga_top #(
     input  wire        sd_miso,
     input  wire        uart_rx_pin,
     output wire        uart_tx_pin,
-    output wire        tmds_clk,
-    output wire [2:0]  tmds_data,
+    output wire        tmds_clk_p,
+    output wire        tmds_clk_n,
+    output wire [2:0]  tmds_data_p,
+    output wire [2:0]  tmds_data_n,
     output logic led0,
     output logic led1,
     output logic led2,
@@ -61,7 +63,8 @@ module fpga_top #(
         .sd_cs_n(sd_cs_n), .sd_sck(sd_sck),
         .sd_mosi(sd_mosi), .sd_miso(sd_miso),
         .uart_rx_pin(uart_rx_pin), .uart_tx_pin(uart_tx_pin),
-        .tmds_clk(tmds_clk), .tmds_data(tmds_data),
+        .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n),
+        .tmds_data_p(tmds_data_p), .tmds_data_n(tmds_data_n),
         .led0(led0), .led1(led1), .led2(led2),
         .led3(led3), .led4(led4), .led5(led5)
     );
