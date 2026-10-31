@@ -234,4 +234,3 @@ module mnist_frame_source_tb;
     end
 
 endmodule
-

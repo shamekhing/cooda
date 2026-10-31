@@ -3,7 +3,7 @@
 // sd_image_tb  a real card image, packed on the host, loaded by RTL
 // ============================================================
 //
-// This is the test that closes the loop: tools/mnist_pack.py writes a
+// This is the test that closes the loop: tools/mnist/mnist_pack.py writes a
 // card image, this testbench reads that exact file into the card
 // model, and the RTL has to put every byte of the payload into the
 // bus target at the offset the header asks for. Nothing about the
@@ -172,7 +172,7 @@ module sd_image_tb;
         // nothing to test, and that is a skip rather than a failure.
         image_fd = $fopen(IMAGE_FILE, "rb");
         if (image_fd == 0) begin
-            $display("SKIP: sd_image (%s not found; run tools/mnist_pack.py)", IMAGE_FILE);
+            $display("SKIP: sd_image (%s not found; run tools/mnist/mnist_pack.py)", IMAGE_FILE);
             $finish;
         end
 
@@ -307,4 +307,3 @@ module sd_image_tb;
     end
 
 endmodule
-

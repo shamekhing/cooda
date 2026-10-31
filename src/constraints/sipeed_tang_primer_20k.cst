@@ -12,27 +12,28 @@ IO_PORT "btn_n2" IO_TYPE=LVCMOS15 PULL_MODE=UP BANK_VCCIO=1.5;
 IO_LOC  "btn_n3" T11;
 IO_PORT "btn_n3" IO_TYPE=LVCMOS15 PULL_MODE=UP BANK_VCCIO=1.5;
 
-// HDMI: each TMDS pair is ONE net constrained onto the pair's two
-// pins, the way the Sipeed HDMI example constrains the connector.
-IO_LOC  "tmds_clk" G16,H15;
-IO_PORT "tmds_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
-IO_LOC  "tmds_data[0]" H14,H16;
-IO_PORT "tmds_data[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
-IO_LOC  "tmds_data[1]" J15,K16;
-IO_PORT "tmds_data[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
-IO_LOC  "tmds_data[2]" K14,K15;
-IO_PORT "tmds_data[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE BANK_VCCIO=3.3;
-IO_LOC  "led0" N16;
+// HDMI TMDS: true LVDS output buffers drive each differential pair.
+// Constrain the positive side; Gowin assigns the paired negative pin.
+IO_LOC  "tmds_clk_p" G16,H15;
+IO_PORT "tmds_clk_p" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+IO_LOC  "tmds_data_p[0]" H14,H16;
+IO_PORT "tmds_data_p[0]" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+IO_LOC  "tmds_data_p[1]" J15,K16;
+IO_PORT "tmds_data_p[1]" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+IO_LOC  "tmds_data_p[2]" K14,K15;
+IO_PORT "tmds_data_p[2]" IO_TYPE=LVDS25 PULL_MODE=NONE DRIVE=3.5;
+// Board LED numbering follows the Tang Primer 20K core-board pin map.
+IO_LOC  "led0" P15;
 IO_PORT "led0" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
-IO_LOC  "led1" N14;
+IO_LOC  "led1" N15;
 IO_PORT "led1" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
-IO_LOC  "led2" L14;
+IO_LOC  "led2" N14;
 IO_PORT "led2" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
-IO_LOC  "led3" L16;
+IO_LOC  "led3" L14;
 IO_PORT "led3" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
-IO_LOC  "led4" C13;
+IO_LOC  "led4" R16;
 IO_PORT "led4" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
-IO_LOC  "led5" A13;
+IO_LOC  "led5" P16;
 IO_PORT "led5" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
 
 // Tang Primer 20K dock DDR3 pinout (same mapping as the upstream PHY).
@@ -148,3 +149,9 @@ IO_LOC  "sd_mosi" R14;
 IO_PORT "sd_mosi" IO_TYPE=LVCMOS15 PULL_MODE=UP DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC  "sd_miso" M8;
 IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+
+// The UART pins are in the 1.5 V bank shared with DDR3.
+IO_LOC  "uart_tx_pin" M11;
+IO_PORT "uart_tx_pin" IO_TYPE=LVCMOS15 PULL_MODE=UP DRIVE=8 BANK_VCCIO=1.5;
+IO_LOC  "uart_rx_pin" T13;
+IO_PORT "uart_rx_pin" IO_TYPE=LVCMOS15 PULL_MODE=NONE BANK_VCCIO=1.5;

@@ -223,4 +223,3 @@ module mnist_fetch #(
     end
 
 endmodule
-

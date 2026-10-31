@@ -70,8 +70,8 @@ module hdmi_timing #(
     end
 
     assign de          = h_active && v_active;
-    assign hs          = h_sync_on;
-    assign vs          = v_sync_on;
+    assign hs          = !h_sync_on;
+    assign vs          = !v_sync_on;
     assign pixel_x     = h_count_q - h_back_w;
     assign pixel_y     = v_count_q - v_back_w;
     assign frame_start = de && (pixel_x == '0) && (pixel_y == '0);

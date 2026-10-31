@@ -1,12 +1,12 @@
 # COODA technical specification
 
-Technical details and measured performance of the COODA SoC as it
-stands on the `sdcard` branch. Everything here is read from the RTL,
+Technical details and measured performance of the COODA SoC. Everything
+here is read from the RTL,
 the constraints, or a test in this repository; numbers that came from a
 simulation are marked *measured*, numbers that come from a datasheet or
 a configuration are marked *calculated*. Hardware bring-up of the
-microSD path has not happened yet, so no number here was measured on a
-board.
+microSD and UART data paths have not happened yet, so no transfer number
+here was measured on a board.
 
 ## 1. System overview
 
@@ -15,19 +15,21 @@ COODA is a 32-bit von Neumann SoC for the Sipeed Tang Primer 20K
 and data requests into one shared bus; a round-robin arbiter gives
 clients access to one memory subsystem made of an initialised BSRAM
 boot region and a 128 MiB DDR3 SDRAM. A hardware loader fills the DDR3
-from a microSD card at boot, so a dataset reaches memory without any
-software.
+from a PC over UART by default or from a microSD card as an alternative,
+so a dataset reaches memory without any CPU software.
 
-Active: CPU, bus, BSRAM, DDR3 (PHY + controller + adapter), microSD
-loader. Inactive and not instantiated: GPU, video output, RPU, TPU.
+Active in the board viewer: CPU, bus, BSRAM, DDR3 (PHY + controller +
+adapter), selectable UART/microSD loader, and HDMI display path. The
+board defaults to UART; SD is the alternative. GPU, RPU, and TPU are
+not instantiated.
 
 ## 2. Clock domains
 
 | Clock | Frequency | Used by |
 | --- | --- | --- |
-| `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, microSD, image fetch |
+| `clk27` | 27.000 MHz | CPU, bus, arbiter, BSRAM, UART, microSD, image fetch |
 | `pclk` | 99.563 MHz | DDR3 controller command/data path |
-| `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serialiser (DDR3-800) |
+| `ck` / `fclk` | 398.25 MHz | DDR3 DRAM interface and serializer (800 MT/s DDR3) |
 | `serial_clk` | 371.25 MHz | HDMI TMDS serialiser (5x the bit pairs) |
 | `pix_clk` | 74.250 MHz | raster, TMDS encoders, frame source |
 
@@ -37,9 +39,10 @@ crosses `clk27` to `pclk` through `ddr3_cdc`, a two-toggle handshake
 with payloads latched before the toggle moves. There is one outstanding
 crossing at a time.
 
-The microSD path has no clock of its own: the card is clocked from
-`clk27` through a divider (397 kHz while the card wakes up, 13.5 MHz
-for data).
+The UART and microSD paths have no separate clock domains. UART is
+sampled and driven from `clk27` at 921600 baud by default; the SD card is
+clocked from `clk27` through a divider (397 kHz during initialization,
+13.5 MHz for data).
 
 The video clocks come from `hdmi_rpll` off the same 27 MHz: 27 MHz x
 55/4 = 371.25 MHz for the serialisers, divided by five to 74.25 MHz
@@ -52,7 +55,7 @@ decoded combinationally, so the scan-out never stalls a clock domain.
 | Region | Range | Size | Notes |
 | --- | --- | --- | --- |
 | BSRAM | `0x0000_0000..0x0000_7FFF` | 32 KiB | boot region, initialised from `boot_program.hex` |
-| DDR3 | `0x0800_0000..0x0FFF_FFFF` | 128 MiB | filled by the microSD loader |
+| DDR3 | `0x0800_0000..0x0FFF_FFFF` | 128 MiB | filled by the selected UART or microSD loader |
 
 Anything else faults with `error` on the responding cycle.
 
@@ -66,8 +69,8 @@ Requests issued before the DDR3 PHY has calibrated are held, not
 failed.
 
 Clients: CPU instruction fetch (slot 0), CPU data (slot 1), the
-microSD loader (slot 2), and slot 3 free for the TPU. The arbiter is
-round-robin and holds a grant through a target stall.
+selected UART/microSD loader (slot 2), and the display fetcher (slot 3).
+The arbiter is round-robin and holds a grant through a target stall.
 
 ## 5. CPU
 
@@ -98,8 +101,11 @@ the system: one `clk27` cycle from request to `ready`.
 
 ### 6.2 DDR3
 
-The DRAM is a 1 Gbit x16 DDR3 at DDR3-800 (400 MHz, both edges), which
-is 1.6 GB/s of raw pin bandwidth. The controller is the vendored
+The DRAM is a 1 Gbit x16 DDR3 at 800 MT/s (400 MHz, both edges), which
+is 1.6 GB/s of raw pin bandwidth. The controller uses its conservative
+DDR3-1066 timing branch at this clock rate; this same-board workaround
+has been reported to resolve calibration failures in the upstream PHY.
+The controller is the vendored
 nand2mario design: it drives Gowin's `DQS`, `OSER8`/`OSER8_MEM` and
 `IDES8_MEM` PHY primitives, runs the command path at `pclk`, and does
 power-up init, ZQ calibration, write levelling and read calibration
@@ -168,8 +174,33 @@ card never came ready, 4 CMD58 failed, 5 CMD16 failed, 6 CMD17 failed,
 failed, 2 bad magic, 3 bad block count, 4 the destination does not fit
 the window, 5 a payload word arrived while the bus was busy.
 
-`tools/mnist_pack.py` builds the image from MNIST IDX files and
+`tools/mnist/mnist_pack.py` builds the image from MNIST IDX files and
 verifies its own output; the full training set is 91,992 blocks.
+
+### UART upload alternative
+
+`mnist_uart_loader` is the default board loader and shares slot 2 with
+the SD loader; only one is selected at build time. It waits for the DDR3
+calibration-ready signal, sends `R`, receives the same fixed 512-byte
+COOD header and then exactly the true payload-byte count, writes
+little-endian full words to DDR3, zero-pads only the final partial word,
+and verifies the additive payload checksum before sending `D`.
+
+The UART is 8N1, LSB-first, at 921600 baud by default, using the
+`clk27` domain. A 60,000-record MNIST payload is about 47.1 MB. UART
+wire time is about 8.5 minutes at the configured baud (calculated as
+10 serial bits per byte); actual host transfer time also depends on the
+USB-UART bridge. `tools/mnist/mnist_uart_send.py` waits for `R`, sends the
+packed header and unpadded payload, then checks the completion status.
+Install `pyserial` on the host to use the script.
+
+The loader reports `E` followed by one binary code: 1 bad magic, 2
+inconsistent block/byte count, 3 invalid destination, 4 checksum
+mismatch, 5 receive timeout, 6 DDR3 bus error. A timeout before any
+header data causes `R` to be resent; timeout partway through a transfer
+is an error. Loader simulation covers successful writes, bad magic,
+checksum mismatch, and partial-header timeout. Physical UART transfer
+has not yet been verified.
 
 ## 8. Display path
 
@@ -196,8 +227,9 @@ in `mnist_view_top`, which wraps the SoC and adds the video half:
 4. `hdmi_tx` serialises TMDS: three `hdmi_tmds_encoder`s (8b/10b DVI
    encoding with running disparity) and four `hdmi_tmds_serializer`s
    (Gowin's OSER10 hard macro, 10:1), plus the clock channel's
-   1111100000 pattern. Each pair leaves the chip as one net that the
-   `.cst` maps onto the two pins of the board's differential pair.
+   1111100000 pattern. A Gowin `TLVDS_OBUF` drives each true
+   differential output pair; the `.cst` assigns `LVDS25` and the
+   positive-side pin locations.
 
 Rate control (`mnist_rate`): the rate is `MAX_RATE >> rate_step` - a
 divisor of the refresh rate, so no setting can outrun the screen. The
@@ -211,8 +243,8 @@ two buttons step the exponent and hold at the ends, never wrapping:
 buttons, so the rate buttons sit on header pins T12 and T11 - jumper
 each to ground for a press.
 
-The HDMI backend is pure RTL plus Gowin hard macros (rPLL, CLKDIV,
-OSER10 - the same primitives the DDR3 PHY uses). It needs no IDE
+The HDMI backend is RTL plus Gowin hard macros (rPLL, CLKDIV, OSER10,
+and TLVDS_OBUF - the same primitive library used by the DDR3 PHY). It needs no IDE
 generated IP, so it both simulates under Icarus and commits.
 
 ## 9. Board I/O
@@ -220,16 +252,19 @@ generated IP, so it both simulates under Icarus and commits.
 | Signal | Pin | Notes |
 | --- | --- | --- |
 | `clk27` | H11 | 27 MHz |
-| `btn_n0` | T3 | reset (CPU and microSD) |
+| `btn_n0` | T3 | reset (CPU, selected loader, and video) |
 | `btn_n1` | T2 | run / pause |
-| `led0..led5` | N16, N14, L14, L16, C13, A13 | active low |
+| `led0..led5` | P15, N15, N14, L14, R16, P16 | active low, board indices 0..5 |
 | DDR3 | A/B/J/G/K/R/L/P/M/F/C/E columns | SSTL15, see the `.cst` |
 | microSD | N11, N10, R14, M8 | SPI mode |
+| UART | T13, M11 | USB-UART RX, TX |
 
-LED meaning, active low: led0 CPU activity, led1 DDR3 write levelling
-done, led2 DDR3 read calibration done, led3 the card initialised,
-led4 the image is in DDR3, led5 nothing failed. The four-bit error
-codes are on `system`'s ports, not on pins.
+Physical LEDs are active low, but the board RTL complements these status
+signals: a lit led0 indicates CPU activity, lit led1/led2 indicate DDR3
+write leveling/read calibration complete, lit led3 indicates the selected
+loader is ready, lit led4 indicates the image is in DDR3, and lit led5
+indicates an error is asserted. The four-bit error codes are on `system`'s
+ports, not on pins.
 
 ## 10. Implementation results
 
@@ -246,7 +281,7 @@ From the Gowin synthesis and place-and-route reports in `impl/` (the
 
 ## 11. Verification
 
-`./run.sh --no-gui` runs fifteen tests, all green:
+`./run.sh --no-gui` runs the available regression suites:
 
 | Test | What it proves |
 | --- | --- |
@@ -256,6 +291,8 @@ From the Gowin synthesis and place-and-route reports in `impl/` (the
 | `system_tb` | bus arbitration, BSRAM store/load |
 | `ddr3_cdc_tb` | the clock crossing under unrelated clocks |
 | `ddr3_target_tb` | the adapter contract, and the write benchmark |
+| `uart_tb` | UART byte loopback and framing-error rejection |
+| `mnist_uart_loader_tb` | UART image upload, DDR word packing, checksum, timeout, and error status |
 | `sd_spi_master_tb` | SPI byte engine, both card speeds (619 checks) |
 | `sd_controller_tb` | the wake-up sequence and every error path (45 checks) |
 | `sd_loader_tb` | the loader against a stalling bus (26 checks) |
@@ -268,6 +305,8 @@ From the Gowin synthesis and place-and-route reports in `impl/` (the
 
 ## 12. Known limits
 
+- A full MNIST upload over 921600-baud UART takes approximately 8.5
+  minutes on the wire; the USB-UART bridge and host add overhead.
 - The microSD path is one bit wide and is clocked at 13.5 MHz, so no
   change to the divider can make it faster than about 3.1 MB/s. A
   4-bit native mode is the next step, and 50 MB/s specifically needs

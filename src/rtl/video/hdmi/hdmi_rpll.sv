@@ -3,10 +3,10 @@
 // ============================================================
 //
 // Readable wrappers around two Gowin hard primitives (rPLL and
-// CLKDIV), configured exactly as the Sipeed HDMI example for this
-// board configures them. Hard macros, not IDE-generated IP.
+// CLKDIV), configured for the board's 720p60 HDMI mode. Hard macros,
+// not IDE-generated IP.
 //
-//   rPLL   : 27 MHz x 55/4 = 371.25 MHz   (VCO = 371.25 x 2 = 742.5)
+//   rPLL   : 27 MHz x 55/4 = 371.25 MHz (VCO = CLKOUT x ODIV = 742.5 MHz)
 //   CLKDIV : /5 -> 74.25 MHz pixel clock
 //
 // The serial clock runs the 10:1 serializers; the pixel clock runs the

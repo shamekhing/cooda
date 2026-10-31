@@ -1,5 +1,5 @@
 // ============================================================
-// hdmi_tx  TMDS transmit chain (pure RTL, no vendor IP)
+// hdmi_tx  TMDS transmit chain with differential LVDS outputs
 // ============================================================
 //
 // Three encoders and four serializers: one pair per colour channel and
@@ -16,9 +16,9 @@
 // wave at one tenth of the serial rate, which is the pixel clock the
 // sink expects.
 //
-// Each pair is driven as ONE logical output; the .cst maps it onto the
-// two pins of the board's differential pair, which is how the Sipeed
-// HDMI example constrains the same connector.
+// Each serialized lane passes through a differential LVDS output buffer;
+// the .cst places each positive output on its HDMI pair and Gowin places
+// the negative output on the paired pin.
 // ============================================================
 
 module hdmi_tx (
@@ -33,13 +33,17 @@ module hdmi_tx (
     input  logic [7:0] g,
     input  logic [7:0] b,
 
-    output logic       tmds_clk,
-    output logic [2:0] tmds_data
+    output wire        tmds_clk_p,
+    output wire        tmds_clk_n,
+    output wire [2:0]  tmds_data_p,
+    output wire [2:0]  tmds_data_n
 );
 
     logic [9:0] q_blue;
     logic [9:0] q_green;
     logic [9:0] q_red;
+    logic       tmds_clk_serial;
+    logic [2:0] tmds_data_serial;
 
     // Clock channel: 5 high, 5 low, every pixel.
     logic [9:0] q_clk;
@@ -102,7 +106,7 @@ module hdmi_tx (
         .serial_clk (serial_clk),
         .rst        (rst),
         .q          (q_blue),
-        .tmds_out   (tmds_data[0])
+        .tmds_out   (tmds_data_serial[0])
     );
 
     hdmi_tmds_serializer u_ser_green (
@@ -110,7 +114,7 @@ module hdmi_tx (
         .serial_clk (serial_clk),
         .rst        (rst),
         .q          (q_green),
-        .tmds_out   (tmds_data[1])
+        .tmds_out   (tmds_data_serial[1])
     );
 
     hdmi_tmds_serializer u_ser_red (
@@ -118,7 +122,7 @@ module hdmi_tx (
         .serial_clk (serial_clk),
         .rst        (rst),
         .q          (q_red),
-        .tmds_out   (tmds_data[2])
+        .tmds_out   (tmds_data_serial[2])
     );
 
     hdmi_tmds_serializer u_ser_clk (
@@ -126,7 +130,21 @@ module hdmi_tx (
         .serial_clk (serial_clk),
         .rst        (rst),
         .q          (q_clk),
-        .tmds_out   (tmds_clk)
+        .tmds_out   (tmds_clk_serial)
     );
+
+    TLVDS_OBUF u_tmds_clk_obuf (
+        .I(tmds_clk_serial), .O(tmds_clk_p), .OB(tmds_clk_n)
+    );
+
+    generate
+        for (genvar lane = 0; lane < 3; lane++) begin : gen_tmds_obuf
+            TLVDS_OBUF u_tmds_data_obuf (
+                .I(tmds_data_serial[lane]),
+                .O(tmds_data_p[lane]),
+                .OB(tmds_data_n[lane])
+            );
+        end
+    endgenerate
 
 endmodule
