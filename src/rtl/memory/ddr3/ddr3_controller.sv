@@ -156,8 +156,8 @@ module ddr3_controller
     // Increment rclkpos/rclksel, send a BL8 read command, and once a rburst
     // pulse is detected, then we have read calibration.
     output            read_calib_done,  // 1: read calibration successful
-    output reg  [1:0] rclkpos,      // cycle value for read clock (0-3), 2 bits for each DQS
-    output reg  [2:0] rclksel,      // phase value for read clock (0-7), 3 bits for each DQS
+    output wire [1:0] rclkpos,      // lane 0's coarse read phase (debug/compatibility)
+    output wire [2:0] rclksel,      // lane 0's fine read phase (debug/compatibility)
     
     output [63:0] debug
 );
@@ -195,7 +195,9 @@ typedef logic [4:0] FIVEB;
 // Debug stuff
 reg [7:0] cnt_read = 0;
 reg [7:0] cnt_write = 0;
-assign debug = {cnt_write, cnt_read, wstep, DDR3_DQ[8], DDR3_DQ[0],
+reg [1:0] rburst_ever_q;
+assign debug = {20'b0, rcalib_lane_locked, rburst_ever_q,
+                cnt_write, cnt_read, wstep, DDR3_DQ[8], DDR3_DQ[0],
                 6'b0, BYTE'(state)};
 
 // Output signals
@@ -282,13 +284,28 @@ assign write_level_done = wlevel_done;
 
 // Read calibration. 
 // Note there's no read eye diagram testing yet.
-reg [3:0] dqs_read = 4'b0;
+reg [3:0] dqs_read_lane [1:0];
+reg [1:0] rclkpos_lane [1:0];
+reg [2:0] rclksel_lane [1:0];
+reg [1:0] rcalib_lane_locked;
+reg [3:0] rcalib_lane_count [1:0];
 reg dqs_hold = 1'b0;
 wire [1:0] rburst;
 reg [1:0] rburst_seen;
 reg rcalib_done = 1'b0;
-reg [3:0] rcalib_cnt = 4'b0;
 assign read_calib_done = rcalib_done;
+assign rclkpos = rclkpos_lane[0];
+assign rclksel = rclksel_lane[0];
+
+// Sticky lane observations for the S2-gated board LEDs.
+always @(posedge pclk) begin
+    if (~rst_lock_n)
+        rburst_ever_q <= 2'b0;
+    else begin
+        if (rburst[0]) rburst_ever_q[0] <= 1'b1;
+        if (rburst[1]) rburst_ever_q[1] <= 1'b1;
+    end
+end
 
 `ifdef SIM
 localparam WLEVEL_COUNT=2;
@@ -597,14 +614,22 @@ always @(posedge pclk) begin
             // activate bank 0
             {nRAS[0], nCAS[0], nWE[0]} <= CMD_BankActivate;
             BA[0] <= 0; A[0] <= 0;
-            rcalib_cnt <= 0;
+            rcalib_lane_locked <= 2'b0;
+            rcalib_lane_count[0] <= 4'd0;
+            rcalib_lane_count[1] <= 4'd0;
+            rclkpos_lane[0] <= 2'd0;
+            rclkpos_lane[1] <= 2'd0;
+            rclksel_lane[0] <= 3'd0;
+            rclksel_lane[1] <= 3'd0;
 `ifdef SIM
             // in simulation the final rclkpos=2, rclksel=0 for DDR3-800
             //                         rclkpos=1, rclksel=1 for DDR3-1066
     `ifdef DDR3_800
-            rclkpos <= 2'd1; rclksel <= 3'd6;
+            rclkpos_lane[0] <= 2'd1; rclkpos_lane[1] <= 2'd1;
+            rclksel_lane[0] <= 3'd6; rclksel_lane[1] <= 3'd6;
     `else
-            rclkpos <= 2'd1; rclksel <= 3'd0;
+            rclkpos_lane[0] <= 2'd1; rclkpos_lane[1] <= 2'd1;
+            rclksel_lane[0] <= 3'd0; rclksel_lane[1] <= 3'd0;
     `endif
 `endif
         end
@@ -619,22 +644,54 @@ always @(posedge pclk) begin
             A[2][9:0] <= 0;                     // row address=0
         end
         {READ_CALIB, FIVEB'(RCD/4+10)}: begin   // Allow 10 cycles for rburst signal
-            if (rburst_seen != 2'b11) begin
-                rclksel <= rclksel + 3'b1;
-                rclkpos <= rclksel == 3'd7 ? rclkpos + 2'b1 : rclkpos;
-                rcalib_cnt <= 0;
-                cycle <= FIVEB'(RCD/4);         // loop
+            // Train each byte lane independently: the two DQS inputs
+            // need not have the same read phase. Require a lane to
+            // burst RCALIB_COUNT consecutive times before locking its
+            // phase; a miss resets its count and continues that lane's
+            // phase sweep.
+            if (!rcalib_lane_locked[0]) begin
+                if (rburst_seen[0]) begin
+                    if (rcalib_lane_count[0] == NIB'(RCALIB_COUNT - 1))
+                        rcalib_lane_locked[0] <= 1'b1;
+                    else
+                        rcalib_lane_count[0] <= rcalib_lane_count[0] + 1'b1;
+                end else begin
+                    rcalib_lane_count[0] <= 4'd0;
+                    if (rclksel_lane[0] == 3'd7) begin
+                        rclksel_lane[0] <= 3'd0;
+                        rclkpos_lane[0] <= rclkpos_lane[0] + 2'd1;
+                    end else begin
+                        rclksel_lane[0] <= rclksel_lane[0] + 3'd1;
+                    end
+                end
+            end
+            if (!rcalib_lane_locked[1]) begin
+                if (rburst_seen[1]) begin
+                    if (rcalib_lane_count[1] == NIB'(RCALIB_COUNT - 1))
+                        rcalib_lane_locked[1] <= 1'b1;
+                    else
+                        rcalib_lane_count[1] <= rcalib_lane_count[1] + 1'b1;
+                end else begin
+                    rcalib_lane_count[1] <= 4'd0;
+                    if (rclksel_lane[1] == 3'd7) begin
+                        rclksel_lane[1] <= 3'd0;
+                        rclkpos_lane[1] <= rclkpos_lane[1] + 2'd1;
+                    end else begin
+                        rclksel_lane[1] <= rclksel_lane[1] + 3'd1;
+                    end
+                end
+            end
+
+            if ((rcalib_lane_locked[0] ||
+                 (rburst_seen[0] && rcalib_lane_count[0] == NIB'(RCALIB_COUNT - 1))) &&
+                (rcalib_lane_locked[1] ||
+                 (rburst_seen[1] && rcalib_lane_count[1] == NIB'(RCALIB_COUNT - 1)))) begin
+                rcalib_done <= 1'b1;
+                {nRAS[0], nCAS[0], nWE[0]} <= CMD_PreCharge;
+                BA[0] <= 0;
+                A[0] <= 0;
             end else begin
-                rcalib_cnt <= rcalib_cnt + 1'b1;
-                // test RCALIB_COUNT times before we commit
-                if (rcalib_cnt == NIB'(RCALIB_COUNT - 1)) begin
-                    // read calibration is achieved
-                    rcalib_done <= 1'b1;
-                    {nRAS[0], nCAS[0], nWE[0]} <= CMD_PreCharge;    // precharge
-                    BA[0] <= 0; A[0] <= 0;                          // bank 0, row 0
-                    // exit read calib
-                end else 
-                    cycle <= FIVEB'(RCD/4);     // loop
+                cycle <= FIVEB'(RCD/4);
             end
         end
         {READ_CALIB, FIVEB'(RCD/4+10+RP/4)}: begin
@@ -666,7 +723,11 @@ always @(posedge pclk) begin
         tick <= 0;
         cycle <= 0;
         wlevel_cnt <= 0; wlevel_done <= 2'b0; wstep <= 0;
-        rcalib_cnt <= 0; rcalib_done <= 0; rclkpos <= 0; rclksel <= 0;
+        rcalib_done <= 0;
+        rclkpos_lane[0] <= 0; rclkpos_lane[1] <= 0;
+        rclksel_lane[0] <= 0; rclksel_lane[1] <= 0;
+        rcalib_lane_locked <= 2'b0;
+        rcalib_lane_count[0] <= 4'd0; rcalib_lane_count[1] <= 4'd0;
         resetn_delay <= 1'b0;       // cause extra 200us reset for DDR3
         state <= RST_WAIT;
   end
@@ -689,11 +750,14 @@ end
 // Then move READ pulse to next cycle (total 4). So there're 32 positions to try.
 // When signals align, there will be a RBURST pulse.
 always @(posedge pclk) begin
-    dqs_read <= 0;
-    if ((state == READ || state == READ_CALIB) 
-            && cycle == FIVEB'(rclkpos+RCD/4+1)) begin
-        dqs_read <= 4'b1111;
-    end
+    dqs_read_lane[0] <= 4'b0;
+    dqs_read_lane[1] <= 4'b0;
+    if ((state == READ || state == READ_CALIB) &&
+        cycle == FIVEB'(rclkpos_lane[0]+RCD/4+1))
+        dqs_read_lane[0] <= 4'b1111;
+    if ((state == READ || state == READ_CALIB) &&
+        cycle == FIVEB'(rclkpos_lane[1]+RCD/4+1))
+        dqs_read_lane[1] <= 4'b1111;
 end
 
 //
@@ -735,7 +799,7 @@ generate
             .RLOADN(1'b0), .WLOADN(1'b0), .RMOVE(1'b0), .WMOVE(1'b0),
             .RDIR(1'b0), .WDIR(1'b0),
             .DLLSTEP(dllstep), .WSTEP(wstep),        // 0.625/0.025
-            .RCLKSEL(rclksel), .READ(dqs_read),
+            .RCLKSEL(rclksel_lane[i0]), .READ(dqs_read_lane[i0]),
             .DQSR90(clk_dqsr[i0]), .WPOINT(dqs_waddr[i0]), .RPOINT(dqs_raddr[i0]), 
             .DQSW0(clk_dqsw[i0]), .DQSW270(clk_dqsw270[i0]), .RBURST(rburst[i0])
         );

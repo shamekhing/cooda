@@ -254,8 +254,8 @@ generated IP, so it both simulates under Icarus and commits.
 | `clk27` | H11 | 27 MHz |
 | `btn_n0` | T3 | reset (CPU, selected loader, and video) |
 | `btn_n1` | T2 | run / pause |
-| `led0..led5` | P15, N15, N14, L14, R16, P16 | active low, board indices 0..5 |
-| DDR3 | A/B/J/G/K/R/L/P/M/F/C/E columns | SSTL15, see the `.cst` |
+| `led0..led5` | C13, A13, N16, N14, L14, L16 | active low, Dock `Orange_LED0..5` |
+| DDR3 | A/B/J/G/K/R/L/P/M/F/C/E columns | `CS#` is FPGA pin P5; SSTL15, see the `.cst` |
 | microSD | N11, N10, R14, M8 | SPI mode |
 | UART | T13, M11 | USB-UART RX, TX |
 

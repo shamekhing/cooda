@@ -25,6 +25,7 @@ module system #(
     output wire        DDR3_nRAS,
     output wire        DDR3_nCAS,
     output wire        DDR3_nWE,
+    output wire        DDR3_nCS,
     output wire        DDR3_CK,
     output wire        DDR3_CKE,
     output wire        DDR3_nRESET,
@@ -229,7 +230,7 @@ module system #(
                 .DDR3_DQ(DDR3_DQ), .DDR3_DQS(DDR3_DQS),
                 .DDR3_A(DDR3_A), .DDR3_BA(DDR3_BA),
                 .DDR3_nRAS(DDR3_nRAS), .DDR3_nCAS(DDR3_nCAS),
-                .DDR3_nWE(DDR3_nWE), .DDR3_nCS(), .DDR3_CK(DDR3_CK),
+                .DDR3_nWE(DDR3_nWE), .DDR3_nCS(DDR3_nCS), .DDR3_CK(DDR3_CK),
                 .DDR3_CKE(DDR3_CKE), .DDR3_nRESET(DDR3_nRESET),
                 .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT),
                 .pclk(ddr_pclk), .fclk(ddr_fclk), .ck(ddr_ck),
@@ -242,7 +243,7 @@ module system #(
             );
         end else begin : gen_no_ddr3
             assign ddr_rsp = {ddr_req.valid, arch_pkg::word_t'(0), ddr_req.valid};
-            assign {DDR3_A, DDR3_BA, DDR3_nRAS, DDR3_nCAS, DDR3_nWE,
+            assign {DDR3_A, DDR3_BA, DDR3_nRAS, DDR3_nCAS, DDR3_nWE, DDR3_nCS,
                     DDR3_CK, DDR3_CKE, DDR3_nRESET, DDR3_DM, DDR3_ODT} = '0;
             assign DDR3_DQ  = 'z;
             assign DDR3_DQS = 'z;

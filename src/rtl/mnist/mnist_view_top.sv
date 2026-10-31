@@ -46,6 +46,7 @@ module mnist_view_top #(
     output wire        DDR3_nRAS,
     output wire        DDR3_nCAS,
     output wire        DDR3_nWE,
+    output wire        DDR3_nCS,
     output wire        DDR3_CK,
     output wire        DDR3_CKE,
     output wire        DDR3_nRESET,
@@ -82,6 +83,8 @@ module mnist_view_top #(
     logic [1:0] sd_card_type;
     logic [3:0] sd_err_code, load_err_code;
     logic [19:0] activity_count;
+    logic [23:0] led_probe_count = 24'd0;
+    logic led_probe_phase = 1'b0;
     logic ddr_pclk, ddr_fclk, ddr_ck, ddr_pll_lock;
     logic ddr_reset_async;
     logic ddr_rst;
@@ -211,7 +214,7 @@ module mnist_view_top #(
         .DDR3_DQ(DDR3_DQ), .DDR3_DQS(DDR3_DQS),
         .DDR3_A(DDR3_A), .DDR3_BA(DDR3_BA),
         .DDR3_nRAS(DDR3_nRAS), .DDR3_nCAS(DDR3_nCAS),
-        .DDR3_nWE(DDR3_nWE), .DDR3_CK(DDR3_CK),
+        .DDR3_nWE(DDR3_nWE), .DDR3_nCS(DDR3_nCS), .DDR3_CK(DDR3_CK),
         .DDR3_CKE(DDR3_CKE), .DDR3_nRESET(DDR3_nRESET),
         .DDR3_DM(DDR3_DM), .DDR3_ODT(DDR3_ODT),
         .retire_valid(retire_valid),
@@ -239,18 +242,25 @@ module mnist_view_top #(
         else if (activity_count != '0) activity_count <= activity_count - 1'b1;
     end
 
-    // LED0/1 are a fixed high/low polarity check; LEDs 2-5 expose the
-    // DDR controller state. Decode the state after observing which of
-    // LEDs 0 and 1 lights on the board.
+    // Free-running half-second LED phase, independent of SoC reset.
+    always_ff @(posedge clk27) begin
+        if (led_probe_count == 24'd13_499_999) begin
+            led_probe_count <= 24'd0;
+            led_probe_phase <= ~led_probe_phase;
+        end else begin
+            led_probe_count <= led_probe_count + 1'b1;
+        end
+    end
+
+    // LED0/1 remain the polarity check. Hold S2 (btn_n1 low) to test
+    // LEDs 2-5: alternating pairs switch every half second. Released,
+    // all four are forced off. LED outputs are active-low.
     assign led0 = 1'b1;
     assign led1 = 1'b0;
     assign dataset_loaded = UART_ENABLE ? uart_load_done : load_done;
-    assign led2 = ddr_debug_status[7:0] == 8'd8
-        ? ddr_debug_status[14] : ddr_debug_status[0];
-    assign led3 = ddr_debug_status[7:0] == 8'd8
-        ? ddr_debug_status[15] : ddr_debug_status[1];
-    assign led4 = ddr_debug_status[7:0] == 8'd8
-        ? ddr_debug_status[16] : ddr_debug_status[2];
-    assign led5 = ddr_debug_status[3];
+    assign led2 = btn_n1 |  led_probe_phase;
+    assign led3 = btn_n1 | ~led_probe_phase;
+    assign led4 = btn_n1 |  led_probe_phase;
+    assign led5 = btn_n1 | ~led_probe_phase;
 
 endmodule
